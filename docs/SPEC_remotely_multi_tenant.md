@@ -5,7 +5,7 @@
 **Author:** Lee
 **Status:** In Design
 **Created:** 2026-05-22T00:00:00Z
-**Last Updated:** 2026-05-23T00:00:00Z
+**Last Updated:** 2026-05-23T01:00:00Z
 **Related Documents:** None.
 
 ---
@@ -213,7 +213,7 @@ Sequence numbers are assigned in the order items are *created*, not the order th
 
 **FR-27 — Server-side org membership validation on every request.** For every request carrying an `organizationId`, the server shall verify that the authenticated user is a member of the specified organization (or is a server admin) before acting. This check is performed in `DataService` methods, not solely in the auth handler or the circuit-side context. See NFR-01.
 
-**FR-30 — OrganizationAdminRequirementHandler org resolution.** The `OrganizationAdminRequirementHandler` shall resolve the target org ID from the HTTP request route data or query string parameter named `organizationId`. It shall then check the authenticated user's `UserOrganizationMembership` for that org, or fall back to `IsServerAdmin`. If no `organizationId` is present in the request, the handler shall deny access. This handler applies to HTTP pipeline authorization only; Blazor circuit pages gate org-admin access through `IActiveOrganizationContext.IsOrgAdmin` and `DataService` method checks.
+**FR-30 — OrganizationAdminRequirementHandler org resolution.** The `OrganizationAdminRequirementHandler` shall resolve the target org ID from the HTTP request route data or query string parameter named `organizationId`. If both route data and query string contain `organizationId`, route data takes precedence. Request body values are not consulted. The handler shall then check the authenticated user's `UserOrganizationMembership` for that org, or fall back to `IsServerAdmin`. If no `organizationId` is present in the request, the handler shall deny access. This handler applies to HTTP pipeline authorization only; Blazor circuit pages gate org-admin access through `IActiveOrganizationContext.IsOrgAdmin` and `DataService` method checks.
 
 ### 2.8 Claims and Session Security
 
@@ -521,13 +521,13 @@ The following existing methods read `user.OrganizationID` directly from the user
 Methods requiring call-site update (org ID must come from `IActiveOrganizationContext`, not `user.OrganizationID`):
 
 - `AddOrUpdateSavedScript(SavedScript script, string userId)` — sets `script.OrganizationID = user.OrganizationID`; shall accept an explicit `organizationId` parameter instead.
-- `CreateApiToken(string userName, string tokenName, string secretHash)` — stamps `OrganizationID = user.OrganizationID` on the new token; shall accept an explicit `organizationId` parameter.
-- `DeleteApiToken(string userName, string tokenId)` — scopes the token lookup by `user.OrganizationID`; shall accept an explicit `organizationId` parameter.
+- `CreateApiToken(string userName, string tokenName, string secretHash)` — previously stamped `OrganizationID = user.OrganizationID` on the new token; shall set `OrganizationID = null` per FR-28. No `organizationId` parameter required; tokens are identity-only.
+- `DeleteApiToken(string userName, string tokenId)` — previously scoped the lookup by `user.OrganizationID`; shall scope by `userId` only. Tokens belong to users, not orgs (FR-28).
 - `DoesUserHaveAccessToDevice(string deviceId, RemotelyUser remotelyUser)` — compares `device.OrganizationID == remotelyUser.OrganizationID`; shall compare against an explicit `organizationId` parameter.
-- `GetAllApiTokens(string userId)` — filters tokens by `user.OrganizationID`; shall accept an explicit `organizationId` parameter.
+- `GetAllApiTokens(string userId)` — previously filtered tokens by `user.OrganizationID`; shall return all tokens belonging to `userId` without any org filter (FR-28).
 - `GetDeviceGroups(string username)` — filters device groups by `user.OrganizationID` and checks `user.IsAdministrator`; shall accept explicit `organizationId` and `isOrgAdmin` parameters.
 - `GetDevicesForUser(string userName)` — scopes the admin device query by `user.OrganizationID`; shall accept an explicit `organizationId` parameter.
-- `RenameApiToken(string userName, string tokenId, string tokenName)` — scopes the token lookup by `user.OrganizationID`; shall accept an explicit `organizationId` parameter.
+- `RenameApiToken(string userName, string tokenId, string tokenName)` — previously scoped the lookup by `user.OrganizationID`; shall scope by `userId` only (FR-28).
 - `FilterUsersByDevicePermissionInternal(AppDb, IEnumerable<string> userIDs, string deviceID)` — private method that filters org users by `user.OrganizationID == device.OrganizationID`; this comparison is against `device.OrganizationID` (correct — device owns its org) and does not need an active-org parameter, but the method must be verified to not rely on the user's stored org ID.
 
 The following new methods shall be added to `IDataService`:
@@ -751,9 +751,13 @@ When an org admin directly adds an existing user to an org, the added user recei
 
 ## 14. Revision Log
 
+### 2026-05-23T01:00:00Z
+
+Round 3 consistency pass. §8.1 ApiToken bullets corrected (blocker from Round 2 that failed to land): CreateApiToken now sets OrganizationID=null and takes no organizationId parameter; DeleteApiToken, GetAllApiTokens, RenameApiToken now scope by userId only with no org filter, consistent with FR-28/KD-05. FR-30 updated to include route-data-over-query-string precedence rule inline (M-1). Revision log typo corrected: 2.1–2.11 → 2.1–2.10 (M-2).
+
 ### 2026-05-23T00:00:00Z
 
-Round 2 consistency pass. §2 section numbering fixed: duplicate §2.6 resolved; sections renumbered 2.1–2.11 contiguously (API Token Changes=2.5, Server Admin Org Mgmt=2.7, Request Org Context=2.8, Claims=2.9, Lockout=2.10, Schema Migration=2.11). §8.1 ApiToken method bullets corrected to reflect FR-28/KD-05: CreateApiToken, DeleteApiToken, GetAllApiTokens, RenameApiToken no longer take or filter by organizationId; tokens are user-scoped only. AddInvite isAdmin parameter removal and JoinViaInvitation behavior change added to §8.1. §10 rewritten: API surface is now correctly described as materially changed, with breaking changes enumerated (FR-31 legacy token invalidation, FR-25/KD-06 mandatory organizationId parameter), ApiAuthorizationFilter named as FR-31 integration point, FR-30 route-precedence rule added, affected controllers enumerated.
+Round 2 consistency pass. §2 section numbering fixed: duplicate §2.6 resolved; sections renumbered 2.1–2.10 contiguously (API Token Changes=2.5, Server Admin Org Mgmt=2.7, Request Org Context=2.8, Claims=2.9, Lockout=2.10, Schema Migration=2.11). §8.1 ApiToken method bullets corrected to reflect FR-28/KD-05: CreateApiToken, DeleteApiToken, GetAllApiTokens, RenameApiToken no longer take or filter by organizationId; tokens are user-scoped only. AddInvite isAdmin parameter removal and JoinViaInvitation behavior change added to §8.1. §10 rewritten: API surface is now correctly described as materially changed, with breaking changes enumerated (FR-31 legacy token invalidation, FR-25/KD-06 mandatory organizationId parameter), ApiAuthorizationFilter named as FR-31 integration point, FR-30 route-precedence rule added, affected controllers enumerated.
 
 ### 2026-05-22T05:00:00Z
 
