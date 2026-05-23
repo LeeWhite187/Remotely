@@ -5,7 +5,7 @@
 **Author:** Lee
 **Status:** In Design
 **Created:** 2026-05-22T00:00:00Z
-**Last Updated:** 2026-05-22T05:00:00Z
+**Last Updated:** 2026-05-23T00:00:00Z
 **Related Documents:** None.
 
 ---
@@ -198,7 +198,7 @@ Sequence numbers are assigned in the order items are *created*, not the order th
 
 **FR-23 — Server admin org creation.** A server admin shall be able to create a new organization from the server admin UI, specifying the organization name.
 
-### 2.6 Request Org Context
+### 2.7 Request Org Context
 
 **FR-25 — Explicit org ID on every request.** Every request that requires org context shall carry an explicit `organizationId` parameter. The source of that value depends on the caller type:
 
@@ -215,7 +215,7 @@ Sequence numbers are assigned in the order items are *created*, not the order th
 
 **FR-30 — OrganizationAdminRequirementHandler org resolution.** The `OrganizationAdminRequirementHandler` shall resolve the target org ID from the HTTP request route data or query string parameter named `organizationId`. It shall then check the authenticated user's `UserOrganizationMembership` for that org, or fall back to `IsServerAdmin`. If no `organizationId` is present in the request, the handler shall deny access. This handler applies to HTTP pipeline authorization only; Blazor circuit pages gate org-admin access through `IActiveOrganizationContext.IsOrgAdmin` and `DataService` method checks.
 
-### 2.7 Claims and Session Security
+### 2.8 Claims and Session Security
 
 **FR-13 — Thin claims.** User claims shall contain only identity and `IsServerAdmin`. Org membership and per-org roles shall not be stored in claims or cookies. They shall be loaded into a per-circuit scoped security service on connection and refreshed on membership changes.
 
@@ -543,6 +543,11 @@ The following new methods shall be added to `IDataService`:
 
 The existing `ChangeUserIsAdmin(string organizationId, string targetUserId, bool isAdmin)` method is superseded by `SetMemberIsAdmin` above and shall be removed.
 
+The following existing methods also require signature changes under this project:
+
+- `AddInvite(string organizationId, string invitedUser, bool isAdmin)` — the `isAdmin` parameter shall be removed per KD-04. New signature: `AddInvite(string organizationId, string invitedUser)`.
+- `JoinViaInvitation(string userId, string inviteId)` — behavior updated: upon successful registration, this method shall create a `UserOrganizationMembership` record (base privileges) for the org specified by `InviteLink.OrganizationID`, then delete the `InviteLink`. Previously it set `user.OrganizationID` directly; that path is removed.
+
 ### 8.2 External Contracts
 
 The existing Remotely HTTP API (`/swagger`) is updated by this project in the following ways:
@@ -615,9 +620,23 @@ A new Blazor page (`/ServerConfig/Organizations` or a new tab on the existing `S
 
 ## 10. API Surface
 
-The existing Remotely HTTP API is unchanged by this project. The `OrganizationManagementController` may require internal modifications to source org context correctly, but its external surface (endpoint paths, authentication, request/response shapes) is not changed.
+The existing Remotely HTTP API is **materially changed** by this project. The following breaking changes apply to all API consumers:
 
-New org membership management operations (direct add, remove user from org, update role) are performed through the existing Blazor Server UI and `DataService`, not through new API endpoints. Adding API endpoints for membership management is deferred as OI-04.
+**Legacy token invalidation (FR-31).** Any request bearing an API token with a non-null `OrganizationID` (a legacy token) will receive HTTP 401 with a re-authentication message, and the token will be immediately invalidated server-side. API consumers using existing tokens must re-authenticate and generate new tokens after this migration is deployed.
+
+**Mandatory `organizationId` parameter on org-scoped endpoints (FR-25, KD-06).** All API endpoints that operate on org-scoped data must accept an explicit `organizationId` route or query parameter. Previously, org context was derived from the API token's `OrganizationID` field. That field is now unused for this purpose. The implementing agent must audit all HTTP API controllers and add the `organizationId` parameter where missing. Known controllers requiring updates include:
+
+- `OrganizationManagementController` — all endpoints are org-scoped; requires `organizationId` parameter and membership validation on every action.
+- `DevicesController` — device queries are org-scoped; requires `organizationId` parameter.
+- Any other controller that previously derived org context from `ApiToken.OrganizationID`.
+
+**Legacy token detection integration point (FR-31).** The existing `ApiAuthorizationFilter` (applied via `[ServiceFilter(typeof(ApiAuthorizationFilter))]` on API controllers) is the correct integration point for legacy token detection. The filter shall be updated to check `ApiToken.OrganizationID` and execute the invalidation and 401 response before any controller action is invoked.
+
+**Auth handler parameter precedence (FR-30).** The `OrganizationAdminRequirementHandler` reads `organizationId` from HTTP route data. Route data takes precedence over query string if both are present. Request body values are not consulted.
+
+**Unchanged.** Endpoint paths, HTTP methods, and authentication mechanism (API token header) are otherwise unchanged. The Swagger surface is updated only to add the `organizationId` parameter where it was previously absent.
+
+New org membership management operations (direct add, remove user from org, update role) are performed through the Blazor Server UI and `DataService` only. Exposing these through the API is deferred as OI-04.
 
 ---
 
@@ -731,6 +750,10 @@ When an org admin directly adds an existing user to an org, the added user recei
 ---
 
 ## 14. Revision Log
+
+### 2026-05-23T00:00:00Z
+
+Round 2 consistency pass. §2 section numbering fixed: duplicate §2.6 resolved; sections renumbered 2.1–2.11 contiguously (API Token Changes=2.5, Server Admin Org Mgmt=2.7, Request Org Context=2.8, Claims=2.9, Lockout=2.10, Schema Migration=2.11). §8.1 ApiToken method bullets corrected to reflect FR-28/KD-05: CreateApiToken, DeleteApiToken, GetAllApiTokens, RenameApiToken no longer take or filter by organizationId; tokens are user-scoped only. AddInvite isAdmin parameter removal and JoinViaInvitation behavior change added to §8.1. §10 rewritten: API surface is now correctly described as materially changed, with breaking changes enumerated (FR-31 legacy token invalidation, FR-25/KD-06 mandatory organizationId parameter), ApiAuthorizationFilter named as FR-31 integration point, FR-30 route-precedence rule added, affected controllers enumerated.
 
 ### 2026-05-22T05:00:00Z
 
