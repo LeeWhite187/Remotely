@@ -5,7 +5,7 @@
 **Author:** Lee
 **Status:** In Design
 **Created:** 2026-05-22T00:00:00Z
-**Last Updated:** 2026-05-22T04:00:00Z
+**Last Updated:** 2026-05-22T05:00:00Z
 **Related Documents:** None.
 
 ---
@@ -182,21 +182,48 @@ Sequence numbers are assigned in the order items are *created*, not the order th
 
 **FR-24 — Last membership removal prevention.** The system shall prevent removal of a `UserOrganizationMembership` record if it is the user's last membership and the user is not a server admin. The operation shall be rejected with a message directing the admin to delete the user account instead.
 
+**FR-26 — DeviceGroup assignment cleanup on org removal.** Removing a user from an organization (FR-20) shall also remove all of that user's DeviceGroup assignments within that organization, in the same database transaction. A user added to a new org receives no default DeviceGroup assignments; their visible devices are determined by subsequent explicit group assignments by an org admin.
+
 **FR-21 — Grant and revoke invite privilege.** An organization admin shall be able to grant or revoke `CanInvite` on any membership record within their organization, subject to the lockout prevention rules in FR-15.
 
-### 2.5 Server Admin Organization Management
+### 2.5 API Token Changes
+
+**FR-28 — ApiToken org divorce.** `ApiToken.OrganizationID` shall be made nullable in the schema. New API tokens shall be created with `OrganizationID = null`. API tokens authenticate user identity only; the target org is supplied per-request via an explicit `organizationId` parameter (FR-25).
+
+**FR-31 — Legacy token invalidation.** On receipt of any API token where `OrganizationID` is non-null (a legacy token), the server shall immediately invalidate that token (delete or revoke it), return HTTP 401, and include a response message directing the client to log in again and generate a new token. This applies regardless of whether the legacy token is otherwise valid or expired. Legacy token detection and invalidation shall occur before any other request processing.
+
+### 2.6 Server Admin Organization Management
 
 **FR-22 — Server admin org listing.** A server admin shall be able to view a list of all organizations on the server, including organization name, ID, member count, and device count.
 
 **FR-23 — Server admin org creation.** A server admin shall be able to create a new organization from the server admin UI, specifying the organization name.
 
-### 2.6 Claims and Session Security
+### 2.6 Request Org Context
+
+**FR-25 — Explicit org ID on every request.** Every request that requires org context shall carry an explicit `organizationId` parameter. The source of that value depends on the caller type:
+
+- **Blazor circuit components** — supplied by `IActiveOrganizationContext`, passed explicitly to `DataService` methods.
+- **HTTP API calls (API token auth)** — supplied as a route or query parameter by the API caller. `ApiToken.OrganizationID` is not used for this purpose (see FR-28).
+- **HTTP API calls (cookie auth)** — supplied as a route or query parameter. There is no circuit in an HTTP request context; `IActiveOrganizationContext` is not available.
+- **Agent SignalR hubs** — the device's own `OrganizationID` is the org context; this is not the active-user org and is not affected by this project.
+- **Registration flow** — the `InviteLink.OrganizationID` supplies the org context before the user is authenticated.
+- **Background services (e.g., email sender)** — org ID is passed as an explicit parameter from the originating call context.
+
+`IActiveOrganizationContext` is a Blazor Server circuit-scoped service. It MUST NOT be injected into HTTP controllers, auth handlers, background services, or any non-circuit context. See §5.3.
+
+**FR-27 — Server-side org membership validation on every request.** For every request carrying an `organizationId`, the server shall verify that the authenticated user is a member of the specified organization (or is a server admin) before acting. This check is performed in `DataService` methods, not solely in the auth handler or the circuit-side context. See NFR-01.
+
+**FR-30 — OrganizationAdminRequirementHandler org resolution.** The `OrganizationAdminRequirementHandler` shall resolve the target org ID from the HTTP request route data or query string parameter named `organizationId`. It shall then check the authenticated user's `UserOrganizationMembership` for that org, or fall back to `IsServerAdmin`. If no `organizationId` is present in the request, the handler shall deny access. This handler applies to HTTP pipeline authorization only; Blazor circuit pages gate org-admin access through `IActiveOrganizationContext.IsOrgAdmin` and `DataService` method checks.
+
+### 2.7 Claims and Session Security
 
 **FR-13 — Thin claims.** User claims shall contain only identity and `IsServerAdmin`. Org membership and per-org roles shall not be stored in claims or cookies. They shall be loaded into a per-circuit scoped security service on connection and refreshed on membership changes.
 
 **FR-14 — Real-time membership notification.** When a user's org membership or per-org role changes, the server shall notify any connected circuits for that user via SignalR. The circuit shall refresh its local security state and display a toast notification to the user only if the refresh reveals a change from the previously held state.
 
-### 2.7 Lockout Prevention
+**FR-29 — Live org revocation behavior.** If a user's active organization is revoked while they have an active circuit (i.e., their `UserOrganizationMembership` for the currently active org is deleted), the circuit shall detect this via the `MembershipChangedMessage` refresh cycle (FR-14), display a warning toast notifying the user that their access to the organization has been revoked, and present the org switcher prominently to prompt selection of a new active org. The UI shall not silently switch to another org. If no memberships remain (only possible if FR-24 was bypassed due to a server admin acting as fallback), the circuit shall display an access-revoked full-page notice directing the user to contact the server admin.
+
+### 2.9 Lockout Prevention
 
 **FR-15 — Org admin lockout prevention.** The system shall prevent the last active administrator of an organization from being demoted or removed from that organization, unless at least one active server admin exists on the server.
 
@@ -204,9 +231,9 @@ Sequence numbers are assigned in the order items are *created*, not the order th
 
 **FR-17 — Server admin self-demotion prevention.** A server admin shall not be permitted to remove their own `IsServerAdmin` flag, regardless of how many other active server admins exist.
 
-### 2.8 Schema Migration
+### 2.10 Schema Migration
 
-**FR-19 — EF Core migration.** The schema changes required by this project shall be delivered as an EF Core migration. All existing user, organization, device group, and device data shall be preserved without loss. Existing single-org user records shall be migrated to `UserOrganizationMembership` records carrying their existing `IsAdministrator` value.
+**FR-19 — EF Core migration.** The schema changes required by this project shall be delivered as an EF Core migration. All existing user, organization, device group, and device data shall be preserved without loss. Existing single-org user records shall be migrated to `UserOrganizationMembership` records carrying their existing `IsAdministrator` value. **Exception:** all existing `InviteLink` records shall be deleted as part of the migration; unclaimed invitations are not forward-compatible with the new invitation model (see KD-04 and §6.2). This is an intentional data truncation, not an unintended loss.
 
 ---
 
@@ -218,11 +245,11 @@ Not applicable: this project introduces no new query patterns beyond the additio
 
 ### 3.2 Reliability and Availability
 
-**NFR-04 — Circuit resilience.** Loss or reconnection of a Blazor Server circuit shall not corrupt the active organization context. On reconnection, the circuit shall reload membership state from the server and restore a valid active org context. If the previously active org is no longer accessible to the user, the circuit shall default to the first available membership.
+**NFR-04 — Circuit resilience.** Loss or reconnection of a Blazor Server circuit shall not corrupt the active organization context. On reconnection, the circuit shall reload membership state from the server and restore a valid active org context. If the previously active org is no longer accessible to the user, the circuit shall default to the first available membership. For the live-revocation case (active org removed while circuit is connected), behavior is defined in FR-29.
 
 ### 3.3 Security
 
-**NFR-01 — Server-side authorization authority.** All membership and permission checks shall be performed server-side on every request. The client-side scoped security service is a reflection of server state for UX purposes only and shall never be the sole authority for access control decisions.
+**NFR-01 — Server-side authorization authority.** All membership and permission checks shall be performed server-side on every request. The client-side scoped security service is a reflection of server state for UX purposes only and shall never be the sole authority for access control decisions. Authorization checks in `IDataService` methods MUST NOT trust the calling circuit's `IActiveOrganizationContext` state and MUST re-verify membership and role against the current database state on every call. The window between a membership change event and circuit refresh is non-zero; stale circuit state must never result in unauthorized data access.
 
 **NFR-02 — Org data isolation.** A user shall never be able to retrieve devices, device groups, scripts, logs, or any other org-scoped data from an organization other than their currently active organization, regardless of how requests are constructed.
 
@@ -283,7 +310,8 @@ Remotely/
       RemotelyUser.cs           [modified — remove OrganizationID FK, IsAdministrator]
       Organization.cs           [modified — update navigation properties]
       UserOrganizationMembership.cs   [new entity]
-      InviteLink.cs             [modified — scope to new users only]
+      InviteLink.cs             [modified — scope to new users only; all rows deleted in migration]
+      ApiToken.cs               [modified — OrganizationID made nullable]
   Server/
     Data/
       AppDb.cs                  [modified — new entity registration, updated model config]
@@ -340,6 +368,20 @@ This project introduces changes to two of those tiers:
 
 The `IActiveOrganizationContext` is a convenience layer for the UI. It is not a security boundary. Every `DataService` method that accepts an org ID shall independently verify that the calling user has membership in (or server admin access to) the specified org. The context can be wrong or stale; the data layer must not trust it blindly.
 
+`IActiveOrganizationContext` is registered as a Blazor Server circuit-scoped service. It is only available within the Blazor circuit's DI scope. It MUST NOT be injected into or relied upon by: HTTP API controllers, ASP.NET Core authorization handlers (including `OrganizationAdminRequirementHandler`), background services, SignalR agent hubs, or the registration flow. These callers resolve org context from the request itself (FR-25). See §8.1 for the caller-type matrix.
+
+### 5.4 Sources of Active Org ID by Caller Type
+
+| Caller type | Source of org ID | Notes |
+|---|---|---|
+| Blazor circuit component | `IActiveOrganizationContext.ActiveOrganizationId` | Passed explicitly to DataService |
+| HTTP API — API token auth | Route or query param `organizationId` | Token carries no org ID (FR-28) |
+| HTTP API — cookie auth | Route or query param `organizationId` | No circuit available |
+| `OrganizationAdminRequirementHandler` | Route data / query param `organizationId` | FR-30 |
+| Agent SignalR hub | `device.OrganizationID` | Unaffected by this project |
+| New user registration | `InviteLink.OrganizationID` | Pre-auth; no circuit |
+| Background/email services | Explicit parameter from originating context | Never from IActiveOrganizationContext |
+
 ---
 
 ## 6. Data Model
@@ -354,7 +396,9 @@ The `IActiveOrganizationContext` is a convenience layer for the UI. It is not a 
 
 **InviteLink (modified).** The `IsAdmin` field is removed, since invited users always receive base member privileges (FR-08, FR-09). The entity otherwise remains structurally unchanged. Invitations are for new users only (FR-12).
 
-**DeviceGroup (unchanged).** The many-to-many between `RemotelyUser` and `DeviceGroup` remains. Since `DeviceGroup` already carries `OrganizationID`, group associations are implicitly org-scoped. The join table is unaffected.
+**DeviceGroup (unchanged structurally).** The many-to-many between `RemotelyUser` and `DeviceGroup` remains. Since `DeviceGroup` already carries `OrganizationID`, group associations are implicitly org-scoped. The join table structure is unaffected. However, when a user is removed from an org (FR-20), all rows in the `RemotelyUserDeviceGroup` join table linking that user to DeviceGroups belonging to that org must be deleted in the same transaction (FR-26). Failure to do so leaves orphaned join rows that could produce data-access anomalies if the join is ever queried without a redundant org check.
+
+**ApiToken (modified).** `ApiToken.OrganizationID` is made nullable. New tokens are created with `OrganizationID = null`. Legacy tokens (non-null `OrganizationID`) are detected on first use, immediately invalidated, and the caller is directed to re-authenticate (FR-28, FR-31). The `OrganizationID` column is retained in the schema for legacy detection purposes; it is dropped in a future migration once all legacy tokens have been cycled out (OI-08).
 
 **Device (unchanged).** `Device.OrganizationID` and `Device.DeviceGroupID` are unchanged.
 
@@ -379,7 +423,11 @@ No columns added (membership is in the new table).
 
 **InviteLinks — modified**
 
-Column removed: `IsAdmin`.
+Column removed: `IsAdmin`. All existing rows deleted as part of the migration (FR-19).
+
+**ApiTokens — modified**
+
+`OrganizationID` column type changed from `string NOT NULL` to `string NULL`. Existing token rows retain their current `OrganizationID` value; this non-null value is what marks them as legacy tokens subject to FR-31. New tokens are inserted with `OrganizationID = null`.
 
 ### 6.3 Identifiers
 
@@ -407,7 +455,9 @@ This project does not add new projects to the solution. The existing project str
 
 **Remotely.Server** — ASP.NET Core application, Blazor Server UI, data service, auth handlers, migrations. This project receives `IActiveOrganizationContext`, `ActiveOrganizationContext`, the org switcher component, updates to `AppDb`, `DataService`, and `OrganizationAdminRequirementHandler`.
 
-All other projects (`Agent`, `Desktop.*`, `Tests`) are unaffected.
+**Remotely.Tests** — The tests project will require updates. Every `IDataService` method signature that changes (see §8.1), the new auth handler behavior (FR-30), and the new migration (FR-19) will affect existing test coverage. The implementing agent should update or add tests as part of each change rather than treating the tests project as out of scope.
+
+`Agent` and `Desktop.*` projects are unaffected.
 
 ### 7.2 Library Boundary Rationale
 
@@ -495,7 +545,11 @@ The existing `ChangeUserIsAdmin(string organizationId, string targetUserId, bool
 
 ### 8.2 External Contracts
 
-The existing Remotely HTTP API (`/swagger`) is unchanged by this project. Existing API token authentication and org-scoped API endpoints continue to function. API tokens are scoped to an organization via the existing `ApiToken.OrganizationID` FK, which is unaffected.
+The existing Remotely HTTP API (`/swagger`) is updated by this project in the following ways:
+
+- **API token org scope removed.** `ApiToken.OrganizationID` is made nullable (FR-28). All API endpoints that previously derived org context from the token must now accept an explicit `organizationId` route or query parameter. This is a **breaking change** for existing API consumers; see FR-31 for the legacy token handling that signals re-authentication.
+- **Org ID required on org-scoped endpoints.** Any endpoint that operates on org-scoped data must accept an `organizationId` parameter and validate the caller's membership in that org server-side (FR-27).
+- **Endpoint paths and HTTP methods** are otherwise unchanged. The Swagger surface is modified only to add the `organizationId` parameter where missing.
 
 ### 8.3 DTOs and Wire Types
 
@@ -593,7 +647,7 @@ This project introduces no infrastructure changes. Remotely is deployed as a Doc
 
 **Alternatives considered.** Explicit membership for server admins in all orgs was rejected due to maintenance burden. A separate "super-admin org role" concept was considered but added unnecessary complexity.
 
-**Consequences.** The `IActiveOrganizationContext` and all data service authorization checks must check `IsServerAdmin` before checking membership records. See FR-18, FR-05.
+**Consequences.** The `IActiveOrganizationContext` and all data service authorization checks must check `IsServerAdmin` before checking membership records. See FR-18, FR-05. A deliberate consequence of this decision is that an org may have zero explicit org admins — if the last explicit org admin is demoted while a server admin exists (FR-15 permits this). In that state, only server admins can perform admin-level actions within that org. This is an accepted steady state; "the primary admin contact for tenant org X" is an organizational convention, not a system invariant.
 
 ### KD-03 — Invitations are for new users only
 
@@ -615,6 +669,26 @@ This project introduces no infrastructure changes. Remotely is deployed as a Doc
 
 **Consequences.** `InviteLink.IsAdmin` is removed. `DataService.AddUserToOrganization` always creates memberships with default-false flags. See FR-08, FR-09.
 
+### KD-05 — API tokens are identity-only; org ID is always a request parameter
+
+**Decision.** `ApiToken.OrganizationID` is removed as an active field. Tokens authenticate user identity only. The target organization for any API call is supplied as an explicit `organizationId` parameter on the request. Legacy tokens (non-null `OrganizationID`) are invalidated immediately on receipt.
+
+**Rationale.** Org-scoped tokens require minting a new token each time a user switches org context, introducing latency and coupling token lifecycle to UI navigation state. Since the goal of this project is to allow a single identity to span multiple orgs, binding a token to a single org is architecturally inconsistent with that goal. An explicit per-request org parameter is cleaner, stateless, and consistent with how the rest of the system now works.
+
+**Alternatives considered.** Including all org memberships as claims in the token was considered. Rejected because it requires token reissuance whenever memberships change, reintroducing the latency and complexity problem. Keeping `OrganizationID` on tokens but making it optional was considered but would create two code paths for every token-authenticated request.
+
+**Consequences.** This is a breaking change to the existing API surface. All existing API consumers must update their requests to pass `organizationId` explicitly. Legacy tokens are forcibly invalidated on first use with a clear re-authentication message. `ApiToken.OrganizationID` is retained as a nullable column for legacy detection; it is dropped in a follow-on migration (OI-08). See FR-28, FR-31.
+
+### KD-06 — Org ID is a universal explicit request parameter
+
+**Decision.** Regardless of how a caller is authenticated (API token, cookie, Blazor circuit), the target organization for any org-scoped operation is always supplied as an explicit parameter. There is no implicit "current org" derived from the auth token or session at the HTTP pipeline level.
+
+**Rationale.** A uniform rule across all caller types eliminates special-casing in the auth handler, the data service, and the API layer. It is also the only rule that works correctly given that `IActiveOrganizationContext` is only available inside Blazor circuits and that tokens no longer carry an org ID (KD-05).
+
+**Alternatives considered.** Deriving org context from a custom HTTP header was considered but rejected as non-standard and harder to document. Deriving it from a session cookie was rejected as it would require server-side session state outside of Blazor circuits.
+
+**Consequences.** `OrganizationAdminRequirementHandler` reads org ID from route/query data (FR-30). All org-scoped `IDataService` methods accept an explicit `organizationId` parameter. The implementing agent must audit all HTTP API controller methods for this parameter. See FR-25, FR-27.
+
 ---
 
 ## 13. Open Items
@@ -631,6 +705,8 @@ Resolved. The author's self-hosted instance runs SQLite and that is the only bac
 
 Resolved. On circuit initialization, `IActiveOrganizationContext` shall read a user-scoped key from browser `localStorage` (via JS interop) to determine the last active org. If the stored org ID is found and the user retains membership in that org (or is a server admin), it is used as the default. Otherwise the circuit falls back to the user's first membership by creation date. On every org switch, the switcher component writes the new org ID to `localStorage` under the same user-scoped key. This gives the user a shared org preference across tabs, consistent with how other per-site preferences (e.g., theme) behave. The multi-tab edge case — where two tabs intentionally show different orgs simultaneously — is accepted as a known limitation and deferred to OI-07.
 
+**Implementation note (Blazor prerender):** JS interop calls cannot execute during Blazor Server prerendering or during `OnInitializedAsync`. The `localStorage` read must be deferred to `OnAfterRenderAsync(firstRender: true)`. This means the first render of the device grid will use the fallback default (first membership by creation date) and may briefly swap to the stored preference on the subsequent render cycle. This flicker is accepted as a known minor UX limitation of the v1 implementation.
+
 
 ### OI-06 — Docker image build for fork
 
@@ -639,6 +715,10 @@ The author currently runs the upstream `immybot/remotely:latest` Docker image. C
 ### OI-07 — Per-tab independent org context
 
 The current design stores the last active org in `localStorage`, which is shared across all tabs in the same browser (OI-03). A user who intentionally opens two tabs to manage two different orgs simultaneously will find that switching orgs in one tab updates `localStorage` and affects any subsequently opened tabs. This is accepted as a known limitation of the v1 design. A future refinement could use `sessionStorage` (per-tab, not shared) for the active org, falling back to `localStorage` for the initial default. Deferred; no decision needed before initial implementation.
+
+### OI-08 — Drop ApiToken.OrganizationID column
+
+Once all legacy API tokens have been invalidated and cycled out (FR-31), the `OrganizationID` column on `ApiTokens` serves no further purpose and should be removed in a follow-on EF Core migration. The column is retained in v1 solely to detect legacy tokens. The implementing agent should note that the column must not be dropped in the v1 migration. A future pass should confirm no legacy tokens remain before dropping.
 
 ### OI-04 — API endpoints for membership management
 
@@ -651,6 +731,10 @@ When an org admin directly adds an existing user to an org, the added user recei
 ---
 
 ## 14. Revision Log
+
+### 2026-05-22T05:00:00Z
+
+Post-CLI-review pass addressing all material and editorial gaps from external spec review. FR-25 and FR-30 added: explicit org ID on every request; OrganizationAdminRequirementHandler resolution rule. FR-26 added: DeviceGroup assignment cleanup on org removal. FR-27 added: server-side org membership validation on every request. FR-28 and FR-31 added: ApiToken org divorce and legacy token invalidation. FR-29 added: live org revocation behavior. FR-19 softened: InviteLink row deletion acknowledged as intentional. NFR-01 reinforced: DataService must not trust circuit-side state. NFR-04 extended to reference live-revocation case. §5.3 expanded: IActiveOrganizationContext circuit-only constraint. §5.4 added: sources-of-org-ID-by-caller-type table. §6.1 updated: DeviceGroup cleanup note; ApiToken modification noted. §6.2 updated: ApiToken schema entry; InviteLink migration note. §7.1 updated: Tests project noted as requiring updates. §8.2 updated: API token breaking change documented. KD-02 updated: zero-explicit-admin-org steady state acknowledged. KD-05 added: API token org divorce rationale. KD-06 added: org ID as universal explicit request parameter. OI-03 updated: Blazor prerender JS interop timing note. OI-08 opened: future ApiToken.OrganizationID column drop. §4.4 file map updated: ApiToken.cs added.
 
 ### 2026-05-22T04:00:00Z
 
