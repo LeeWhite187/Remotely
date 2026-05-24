@@ -105,6 +105,48 @@ else
 
         Logger.LogInformation("User created a new account with password.");
 
+        // Multi-tenant first-user bootstrap: if this is the very first user on
+        // the server (the only case where Register sets IsServerAdmin=true on
+        // the new user), create the initial Organization and an org-admin
+        // membership. Self-service org creation is otherwise out of scope (§1.7);
+        // this branch exists only to bootstrap the first server admin.
+        if (user.IsServerAdmin)
+        {
+            var newOrgResult = await DataService.CreateOrganization("New Organization");
+            if (!newOrgResult.IsSuccess)
+            {
+                Logger.LogError(
+                    "First-user bootstrap: CreateOrganization failed for {UserName}. Reason: {Reason}",
+                    Input.Email,
+                    newOrgResult.Reason);
+            }
+            else
+            {
+                var addResult = await DataService.AddUserToOrganization(newOrgResult.Value.ID, user.Id);
+                if (!addResult.IsSuccess)
+                {
+                    Logger.LogError(
+                        "First-user bootstrap: AddUserToOrganization failed for {UserName}. Reason: {Reason}",
+                        Input.Email,
+                        addResult.Reason);
+                }
+                else
+                {
+                    var promoteResult = await DataService.SetMemberIsAdmin(newOrgResult.Value.ID, user.Id, true);
+                    if (!promoteResult.IsSuccess)
+                    {
+                        Logger.LogError(
+                            "First-user bootstrap: SetMemberIsAdmin failed for {UserName}. Reason: {Reason}",
+                            Input.Email,
+                            promoteResult.Reason);
+                    }
+                }
+            }
+            // Note: any failures above leave the user as a server admin with no
+            // explicit org membership. Per KD-02, the user still has implicit org
+            // admin in any org and can recover via the ServerOrganizations page.
+        }
+
         var userId = await UserManager.GetUserIdAsync(user);
         var code = await UserManager.GenerateEmailConfirmationTokenAsync(user);
         code = WebEncoders.Base64UrlEncode(Encoding.UTF8.GetBytes(code));
@@ -127,28 +169,20 @@ else
 
     private RemotelyUser CreateUser()
     {
+        // Multi-tenant refactor: org membership is created separately via
+        // UserOrganizationMembership after the user is persisted. RemotelyUser
+        // no longer carries OrganizationID/Organization/IsAdministrator. The
+        // first-user bootstrap (first server admin + initial org) is handled
+        // in RegisterUser after UserManager.CreateAsync succeeds.
         var organizationCount = DataService.GetOrganizationCount();
-        var user = new RemotelyUser
-            {
-                UserName = Input.Email,
-                Email = Input.Email,
-                IsServerAdmin = organizationCount == 0,
-                Organization = new Organization()
-                {
-                    OrganizationName = string.Empty,
-                    IsDefaultOrganization = organizationCount == 0
-                },
-                UserOptions = new RemotelyUserOptions(),
-                IsAdministrator = true,
-                LockoutEnabled = true
-            };
-
-        if (organizationCount == 0 && HostEnv.IsDevelopment())
+        return new RemotelyUser
         {
-            user.Organization.ID = AppConstants.DebugOrgId;
-            user.OrganizationID = AppConstants.DebugOrgId;
-        }
-        return user;
+            UserName = Input.Email,
+            Email = Input.Email,
+            IsServerAdmin = organizationCount == 0,
+            UserOptions = new RemotelyUserOptions(),
+            LockoutEnabled = true
+        };
     }
 
     private IUserEmailStore<RemotelyUser> GetEmailStore()

@@ -1,0 +1,123 @@
+@page "/server-config/organizations"
+@attribute [Authorize(Policy = PolicyNames.ServerAdminRequired)]
+@inherits AuthComponentBase
+@inject IDataService DataService
+@inject IToastService ToastService
+
+@*
+    Per spec FR-22 / FR-23 (§2.6 Server Admin Organization Management):
+    server admin org listing + creation. Restricted via ServerAdminRequired policy.
+*@
+
+<h3 class="mb-3">Organizations</h3>
+
+@if (_isLoading)
+{
+    <p>Loading...</p>
+}
+else
+{
+    <div class="row mb-4">
+        <div class="col-md-8">
+            <div class="form-group">
+                <label class="control-label">Create New Organization</label>
+                <div class="input-group">
+                    <input @bind="_newOrgName" @bind:event="oninput"
+                           placeholder="Organization name"
+                           maxlength="25"
+                           class="form-control"
+                           @onkeypress="EvaluateNewOrgKeypress" />
+                    <button type="button" class="btn btn-primary" @onclick="CreateNewOrg">Create</button>
+                </div>
+                <div class="text-info small">
+                    Server-admin only. New orgs start with zero members; the server admin
+                    can then add users via Manage Organization.
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <table class="table table-dark table-striped table-hover">
+        <thead>
+            <tr>
+                <th>Name</th>
+                <th>ID</th>
+                <th>Members</th>
+                <th>Devices</th>
+                <th>Default?</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var row in _rows)
+            {
+                <tr @key="row.Organization.ID">
+                    <td>@row.Organization.OrganizationName</td>
+                    <td class="text-muted small">@row.Organization.ID</td>
+                    <td>@row.MemberCount</td>
+                    <td>@row.DeviceCount</td>
+                    <td>
+                        @if (row.Organization.IsDefaultOrganization)
+                        {
+                            <span class="badge text-bg-info">Default</span>
+                        }
+                    </td>
+                </tr>
+            }
+        </tbody>
+    </table>
+}
+
+@code {
+    private record OrgRow(Organization Organization, int MemberCount, int DeviceCount);
+
+    private bool _isLoading = true;
+    private string _newOrgName = string.Empty;
+    private readonly List<OrgRow> _rows = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        await base.OnInitializedAsync();
+        await RefreshRows();
+        _isLoading = false;
+    }
+
+    private async Task RefreshRows()
+    {
+        _rows.Clear();
+        var orgs = await DataService.GetAllOrganizations();
+        foreach (var org in orgs)
+        {
+            var members = await DataService.GetAllUsersInOrganization(org.ID);
+            var deviceCount = DataService.GetDeviceCount(org.ID);
+            _rows.Add(new OrgRow(org, members.Length, deviceCount));
+        }
+    }
+
+    private async Task EvaluateNewOrgKeypress(KeyboardEventArgs args)
+    {
+        if (args.Key.Equals("Enter", StringComparison.OrdinalIgnoreCase))
+        {
+            await CreateNewOrg();
+        }
+    }
+
+    private async Task CreateNewOrg()
+    {
+        if (string.IsNullOrWhiteSpace(_newOrgName))
+        {
+            ToastService.ShowToast("Enter an organization name.", classString: "bg-warning");
+            return;
+        }
+
+        var result = await DataService.CreateOrganization(_newOrgName.Trim());
+        if (!result.IsSuccess)
+        {
+            ToastService.ShowToast2(result.Reason, Enums.ToastType.Warning);
+            return;
+        }
+
+        ToastService.ShowToast($"Organization '{result.Value.OrganizationName}' created.");
+        _newOrgName = string.Empty;
+        await RefreshRows();
+    }
+}

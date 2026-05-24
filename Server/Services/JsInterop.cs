@@ -31,6 +31,15 @@ public interface IJsInterop
 
     void SetStyleProperty(ElementReference element, string propertyName, string value);
     void StartDraggingY(ElementReference element, double clientY);
+
+    /// <summary>Read a value from browser <c>localStorage</c>. Returns null if the key is absent.</summary>
+    ValueTask<string?> LocalStorageGetItem(string key);
+
+    /// <summary>Write a value to browser <c>localStorage</c>.</summary>
+    ValueTask LocalStorageSetItem(string key, string value);
+
+    /// <summary>Remove a value from browser <c>localStorage</c>.</summary>
+    ValueTask LocalStorageRemoveItem(string key);
 }
 
 public class JsInterop : IJsInterop
@@ -114,5 +123,42 @@ public class JsInterop : IJsInterop
     public void StartDraggingY(ElementReference element, double clientY)
     {
         _jsRuntime.InvokeVoidAsync("startDraggingY", element, clientY);
+    }
+
+    public async ValueTask<string?> LocalStorageGetItem(string key)
+    {
+        try
+        {
+            return await _jsRuntime.InvokeAsync<string?>("localStorage.getItem", key);
+        }
+        catch
+        {
+            // localStorage may be unavailable (private mode, prerender, etc.). Treat as absent.
+            return null;
+        }
+    }
+
+    public async ValueTask LocalStorageSetItem(string key, string value)
+    {
+        try
+        {
+            await _jsRuntime.InvokeVoidAsync("localStorage.setItem", key, value);
+        }
+        catch
+        {
+            // Best-effort; ignore if storage is unavailable.
+        }
+    }
+
+    public async ValueTask LocalStorageRemoveItem(string key)
+    {
+        try
+        {
+            await _jsRuntime.InvokeVoidAsync("localStorage.removeItem", key);
+        }
+        catch
+        {
+            // Best-effort.
+        }
     }
 }

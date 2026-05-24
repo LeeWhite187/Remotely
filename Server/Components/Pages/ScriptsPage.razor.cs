@@ -61,7 +61,7 @@ public partial class ScriptsPage : AuthComponentBase
 
         _treeNodes.Clear();
 
-        _allScripts = await DataService.GetSavedScriptsWithoutContent(User.Id, User.OrganizationID);
+        _allScripts = await DataService.GetSavedScriptsWithoutContent(User.Id, ActiveOrgId);
     }
 
     protected override async Task OnInitializedAsync()

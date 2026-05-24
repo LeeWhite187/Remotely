@@ -73,6 +73,7 @@ public class CircuitConnection : CircuitHandler, ICircuitConnection
     private readonly IAgentHubSessionCache _agentSessionCache;
     private readonly IMessenger _messenger;
     private readonly IToastService _toastService;
+    private readonly IActiveOrganizationContext _activeOrgContext;
     private RemotelyUser? _user;
 
     public CircuitConnection(
@@ -86,6 +87,7 @@ public class CircuitConnection : CircuitHandler, ICircuitConnection
         IRemoteControlSessionCache remoteControlSessionCache,
         IAgentHubSessionCache agentSessionCache,
         IMessenger messenger,
+        IActiveOrganizationContext activeOrgContext,
         ILogger<CircuitConnection> logger)
     {
         _dataService = dataService;
@@ -98,8 +100,13 @@ public class CircuitConnection : CircuitHandler, ICircuitConnection
         _remoteControlSessionCache = remoteControlSessionCache;
         _agentSessionCache = agentSessionCache;
         _messenger = messenger;
+        _activeOrgContext = activeOrgContext;
         _logger = logger;
     }
+
+    // Per §5.4: Blazor circuit components source org id from IActiveOrganizationContext.
+    private string ActiveOrgId => _activeOrgContext.ActiveOrganizationId ?? string.Empty;
+    private bool IsOrgAdmin => _activeOrgContext.IsOrgAdmin;
 
 
     public string ConnectionId { get; } = Guid.NewGuid().ToString();
@@ -232,7 +239,7 @@ public class CircuitConnection : CircuitHandler, ICircuitConnection
         }
 
 
-        if (!_dataService.DoesUserHaveAccessToDevice(deviceId, User))
+        if (!_dataService.DoesUserHaveAccessToDevice(deviceId, User, ActiveOrgId, IsOrgAdmin))
         {
             var device = _dataService.GetDevice(targetDevice.ID);
             _logger.LogWarning(
@@ -264,14 +271,14 @@ public class CircuitConnection : CircuitHandler, ICircuitConnection
             AgentConnectionId = serviceConnectionId,
             DeviceId = deviceId,
             ViewOnly = viewOnly,
-            OrganizationId = User.OrganizationID,
+            OrganizationId = ActiveOrgId,
             RequireConsent = settings.EnforceAttendedAccess,
             NotifyUserOnStart = settings.RemoteControlNotifyUser
         };
 
         _remoteControlSessionCache.AddOrUpdate($"{sessionId}", session);
 
-        var orgResult = await _dataService.GetOrganizationNameByUserName($"{User.UserName}");
+        var orgResult = await _dataService.GetOrganizationNameById(ActiveOrgId);
 
         if (!orgResult.IsSuccess)
         {
@@ -285,7 +292,7 @@ public class CircuitConnection : CircuitHandler, ICircuitConnection
             ConnectionId,
             $"{User.UserOptions?.DisplayName}",
             orgResult.Value,
-            User.OrganizationID);
+            ActiveOrgId);
 
         return Result.Ok(session);
     }
@@ -337,7 +344,7 @@ public class CircuitConnection : CircuitHandler, ICircuitConnection
 
     public async Task SendChat(string message, string deviceId, bool isDisconnecting = false)
     {
-        if (!_dataService.DoesUserHaveAccessToDevice(deviceId, User))
+        if (!_dataService.DoesUserHaveAccessToDevice(deviceId, User, ActiveOrgId, IsOrgAdmin))
         {
             return;
         }
@@ -349,13 +356,13 @@ public class CircuitConnection : CircuitHandler, ICircuitConnection
             return;
         }
 
-        if (device.OrganizationID != User.OrganizationID)
+        if (device.OrganizationID != ActiveOrgId)
         {
             _toastService.ShowToast("Unauthorized.");
             return;
         }
 
-        var orgResult = await _dataService.GetOrganizationNameByUserName($"{User.UserName}");
+        var orgResult = await _dataService.GetOrganizationNameById(ActiveOrgId);
         if (!orgResult.IsSuccess)
         {
             _toastService.ShowToast2("Organization not found.", Enums.ToastType.Warning);
@@ -366,7 +373,7 @@ public class CircuitConnection : CircuitHandler, ICircuitConnection
             User.UserOptions?.DisplayName ?? $"{User.UserName}",
             message,
             orgResult.Value,
-            User.OrganizationID,
+            ActiveOrgId,
             isDisconnecting,
             ConnectionId);
     }
@@ -378,7 +385,7 @@ public class CircuitConnection : CircuitHandler, ICircuitConnection
             return false;
         }
 
-        if (!_dataService.DoesUserHaveAccessToDevice(deviceId, User))
+        if (!_dataService.DoesUserHaveAccessToDevice(deviceId, User, ActiveOrgId, IsOrgAdmin))
         {
             _logger.LogWarning("User {username} does not have access to device ID {deviceId} and attempted file upload.",
                 User.UserName,
@@ -422,7 +429,7 @@ public class CircuitConnection : CircuitHandler, ICircuitConnection
 
     public async Task UpdateTags(string deviceID, string tags)
     {
-        if (_dataService.DoesUserHaveAccessToDevice(deviceID, User))
+        if (_dataService.DoesUserHaveAccessToDevice(deviceID, User, ActiveOrgId, IsOrgAdmin))
         {
             if (tags.Length > 200)
             {
@@ -458,7 +465,7 @@ public class CircuitConnection : CircuitHandler, ICircuitConnection
             var availableDevices = _agentSessionCache
                 .GetAllDevices()
                 .Where(x =>
-                     x.OrganizationID == User.OrganizationID &&
+                     x.OrganizationID == ActiveOrgId &&
                     (x.DeviceGroupID == device.DeviceGroupID || x.PublicIP == device.PublicIP))
                 .ToArray();
 
@@ -483,7 +490,7 @@ public class CircuitConnection : CircuitHandler, ICircuitConnection
 
             var availableDevices = _agentSessionCache
                 .GetAllDevices()
-                .Where(x => x.OrganizationID == User.OrganizationID);
+                .Where(x => x.OrganizationID == ActiveOrgId);
 
             var devicesByGroupId = new ConcurrentDictionary<string, List<Device>>();
             var devicesByPublicIp = new ConcurrentDictionary<string, List<Device>>();
@@ -537,7 +544,7 @@ public class CircuitConnection : CircuitHandler, ICircuitConnection
         }
 
         if (!_agentSessionCache.TryGetByDeviceId(deviceId, out var device) ||
-            !_dataService.DoesUserHaveAccessToDevice(device.ID, User) ||
+            !_dataService.DoesUserHaveAccessToDevice(device.ID, User, ActiveOrgId, IsOrgAdmin) ||
             !_agentSessionCache.TryGetConnectionId(device.ID, out var connectionId))
         {
             return (false, string.Empty);
@@ -557,7 +564,7 @@ public class CircuitConnection : CircuitHandler, ICircuitConnection
                 continue;
             }
 
-            if (device.OrganizationID != User.OrganizationID)
+            if (device.OrganizationID != ActiveOrgId)
             {
                 continue;
             }

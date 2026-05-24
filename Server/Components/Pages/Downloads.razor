@@ -7,7 +7,8 @@
 @inject UserManager<RemotelyUser> UserManager
 @inject IWebHostEnvironment HostEnv
 @inject NavigationManager NavManager
-@inject ILogger<Downloads> Logger 
+@inject IActiveOrganizationContext ActiveOrgContext
+@inject ILogger<Downloads> Logger
 
 @if (_isAuthenticated)
 {
@@ -211,11 +212,9 @@
 
         if (_isAuthenticated)
         {
-            var userResult = await Auth.GetUser();
-            if (userResult.IsSuccess)
-            {
-                _organizationId = userResult.Value.OrganizationID;
-            }
+            // Multi-tenant refactor: source the org from the per-circuit context.
+            await ActiveOrgContext.RefreshAsync();
+            _organizationId = ActiveOrgContext.ActiveOrganizationId;
         }
         else
         {

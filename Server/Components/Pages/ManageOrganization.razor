@@ -1,6 +1,15 @@
 ﻿@page "/manage-organization"
-@attribute [Authorize(Policy = PolicyNames.OrganizationAdminRequired)]
+@attribute [Authorize]
 @inherits AuthComponentBase
+
+@*
+    FR-30 / spec §2.7: OrganizationAdminRequirementHandler resolves the target
+    org from a route/query parameter — Blazor `@page` routes don't carry one,
+    so we self-gate via IsOrgAdmin in OnInitializedAsync (see .razor.cs).
+    This matches the spec's explicit guidance in FR-30:
+    "Blazor circuit pages gate org-admin access through
+     IActiveOrganizationContext.IsOrgAdmin and DataService method checks."
+*@
 
 <h3 class="mb-3">Manage Organization</h3>
 
@@ -87,7 +96,8 @@ else if (User is not null)
 
     <div class="row">
         <div class="col-sm-12">
-            @* Users *@
+            @* Users — per §9.3: admin toggle, CanInvite toggle (FR-21),
+               Remove-from-org (FR-20) distinct from full account deletion. *@
             <div class="form-group">
                 <label class="control-label">Users</label>
                 <button class="btn btn-sm btn-secondary ms-2" @onclick="ShowUsersHelp">
@@ -97,9 +107,11 @@ else if (User is not null)
                     <thead>
                         <tr>
                             <th>User Name</th>
-                            <th>Administrator</th>
+                            <th>Admin</th>
+                            <th>Can Invite</th>
                             <th>Device Groups</th>
                             <th>Reset Password</th>
+                            <th>Remove from Org</th>
                             <th>Delete User</th>
                         </tr>
                     </thead>
@@ -110,17 +122,22 @@ else if (User is not null)
                                 <td class="middle-aligned"><label class="control-label">@orgUser.UserName</label></td>
                                 @if (User.Id == orgUser.Id)
                                 {
-                                    <td><input type="checkbox" readonly disabled checked="@orgUser.IsAdministrator" /></td>
+                                    @* Self: cannot demote, revoke invite, remove, or delete self. *@
+                                    <td><input type="checkbox" readonly disabled checked="@IsAdminOf(orgUser)" /></td>
+                                    <td><input type="checkbox" readonly disabled checked="@CanInviteOf(orgUser)" /></td>
                                     <td><button type="button" class="btn btn-secondary" title="Edit" @onclick="() => EditDeviceGroups(orgUser)">Edit</button></td>
                                     <td></td>
+                                    <td><button type="button" class="btn btn-danger" disabled>Remove</button></td>
                                     <td><button type="button" class="btn btn-danger delete-user-button" disabled>Delete</button></td>
                                 }
                                 else
                                 {
-                                    <td><input type="checkbox" @onchange="(ev) => SetUserIsAdmin(ev, orgUser)" checked="@orgUser.IsAdministrator" /></td>
+                                    <td><input type="checkbox" @onchange="(ev) => SetUserIsAdmin(ev, orgUser)" checked="@IsAdminOf(orgUser)" /></td>
+                                    <td><input type="checkbox" @onchange="(ev) => SetUserCanInvite(ev, orgUser)" checked="@CanInviteOf(orgUser)" /></td>
                                     <td><button type="button" class="btn btn-secondary" title="Edit" @onclick="() => EditDeviceGroups(orgUser)">Edit</button></td>
                                     <td><button type="button" class="btn btn-danger" title="Reset Password" @onclick="() => ResetPassword(orgUser)">Reset</button></td>
-                                    <td><button type="button" class="btn btn-danger" title="Delete User" @onclick="() => DeleteUser(orgUser)">Delete</button></td>
+                                    <td><button type="button" class="btn btn-warning" title="Remove from this organization (does not delete the account)" @onclick="() => RemoveFromOrg(orgUser)">Remove</button></td>
+                                    <td><button type="button" class="btn btn-danger" title="Delete user account entirely" @onclick="() => DeleteUser(orgUser)">Delete</button></td>
                                 }
                             </tr>
                         }
@@ -131,20 +148,19 @@ else if (User is not null)
     </div>
 
 
-    @* Invitations *@
+    @* Invitations table — per KD-04 invitees always get base privileges, so no admin column. *@
     <div class="row">
         <div class="col-sm-12">
             <div class="form-group">
-                <label class="control-label">Invitations</label>
+                <label class="control-label">Pending Invitations</label>
                 <button class="btn btn-sm btn-secondary ms-2" @onclick="ShowInvitesHelp">
                     <span class="oi oi-question-mark"></span>
                 </button>
                 <table id="invitesTable" class="table table-dark table-striped table-hover" style="max-height: 400px">
                     <thead>
                         <tr>
-                            <th>Invited User</th>
-                            <th>Administrator</th>
-                            <th>Link(s)</th>
+                            <th>Invited Email</th>
+                            <th>Link</th>
                             <th>Delete</th>
                         </tr>
                     </thead>
@@ -153,7 +169,6 @@ else if (User is not null)
                         {
                             <tr @key="invite.ID">
                                 <td class="middle-aligned"><label class="control-label">@invite.InvitedUser</label></td>
-                                <td class="middle-aligned"><input type="checkbox" checked="@invite.IsAdmin" disabled /></td>
                                 <td class="middle-aligned">
                                     <label class="control-label">
                                         <a href="@(NavManager.BaseUri)Invite/@invite.ID">Join Link</a>
@@ -169,24 +184,39 @@ else if (User is not null)
     </div>
 
 
-    @* Send Invites *@
+    @* §9.3: split into Add Existing User (no email) and Invite New User (email). *@
     <div class="row">
-        <div class="col-sm-8">
-            <div class="text-danger"></div>
+        <div class="col-sm-6">
             <div class="form-group">
-                <label class="control-label">Add User</label>
+                <label class="control-label">Add Existing User</label>
+                <div class="text-info small">
+                    Adds an existing Remotely account to this organization with base privileges.
+                </div>
+                <div class="input-group">
+                    <input @bind="_addExistingInput" @bind:event="oninput"
+                           placeholder="Username or email"
+                           required
+                           class="form-control"
+                           @onkeypress="EvaluateAddExistingKeypress" />
+                    <button type="button" class="btn btn-primary" @onclick="AddExistingUser">Add to Org</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-sm-6">
+            <div class="form-group">
+                <label class="control-label">Invite New User</label>
+                <div class="text-info small">
+                    Sends an email invitation to a new (not-yet-registered) email address.
+                </div>
                 <div class="input-group">
                     <input @bind="_inviteEmail" @bind:event="oninput"
-                           placeholder="Email of user to add"
+                           placeholder="Email address"
                            type="email"
                            required
-                           class="form-control" />
-
-                    <span class="input-group-text pe-1">Admin?</span>
-                    <div class="input-group-text ps-1">
-                        <input @bind="_inviteAsAdmin" type="checkbox" @onkeypress="EvaluateInviteInputKeypress" />
-                    </div>
-                    <button type="button" class="btn btn-primary" @onclick="SendInvite">Add</button>
+                           class="form-control"
+                           @onkeypress="EvaluateInviteInputKeypress" />
+                    <button type="button" class="btn btn-primary" @onclick="SendInvite">Send Invitation</button>
                 </div>
             </div>
         </div>

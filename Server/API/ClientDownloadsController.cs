@@ -103,17 +103,9 @@ public class ClientDownloadsController : ControllerBase
         }
     }
 
-    [ServiceFilter(typeof(ApiAuthorizationFilter))]
-    [HttpGet("{platformID}")]
-    public async Task<IActionResult> GetInstaller(string platformID)
-    {
-        if (!Request.Headers.TryGetOrganizationId(out var orgId))
-        {
-            return Unauthorized();
-        }
-        return await GetInstallFile(orgId, platformID);
-    }
-
+    // KD-06: org id is supplied per request. The two-segment route below is the
+    // canonical entry — Downloads.razor renders URLs of the form
+    // /API/ClientDownloads/{platformId}/{organizationId}.
     [HttpGet("{platformId}/{organizationId}")]
     public async Task<IActionResult> GetInstaller(string platformId, string organizationId)
     {

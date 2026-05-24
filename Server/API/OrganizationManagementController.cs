@@ -37,12 +37,14 @@ public class OrganizationManagementController : ControllerBase
 
     [HttpPost("ChangeIsAdmin/{userID}")]
     [ServiceFilter(typeof(ApiAuthorizationFilter))]
-    public async Task<IActionResult> ChangeIsAdmin(string userId, [FromBody] bool isAdmin)
+    public async Task<IActionResult> ChangeIsAdmin(string userId, [FromBody] bool isAdmin, [FromQuery] string organizationId)
     {
-        if (!Request.Headers.TryGetOrganizationId(out var orgId))
+        // KD-06: org id is supplied per request as the explicit organizationId query param.
+        if (string.IsNullOrWhiteSpace(organizationId))
         {
             return Unauthorized();
         }
+        var orgId = organizationId;
 
         if (User.Identity?.IsAuthenticated == true)
         {
@@ -53,18 +55,25 @@ public class OrganizationManagementController : ControllerBase
             }
         }
 
-        await _dataService.ChangeUserIsAdmin(orgId, userId, isAdmin);
+        // §8.1 + KD-04: superseded by SetMemberIsAdmin (enforces FR-15 lockout).
+        var setResult = await _dataService.SetMemberIsAdmin(orgId, userId, isAdmin);
+        if (!setResult.IsSuccess)
+        {
+            return BadRequest(setResult.Reason);
+        }
         return NoContent();
     }
 
     [HttpDelete("DeleteInvite/{inviteID}")]
     [ServiceFilter(typeof(ApiAuthorizationFilter))]
-    public async Task<IActionResult> DeleteInvite(string inviteID)
+    public async Task<IActionResult> DeleteInvite(string inviteID, [FromQuery] string organizationId)
     {
-        if (!Request.Headers.TryGetOrganizationId(out var orgId))
+        // KD-06: org id is supplied per request as the explicit organizationId query param.
+        if (string.IsNullOrWhiteSpace(organizationId))
         {
             return Unauthorized();
         }
+        var orgId = organizationId;
 
         var result = await _dataService.DeleteInvite(orgId, inviteID);
         _logger.LogResult(result);
@@ -79,12 +88,14 @@ public class OrganizationManagementController : ControllerBase
 
     [HttpDelete("DeleteUser/{userID}")]
     [ServiceFilter(typeof(ApiAuthorizationFilter))]
-    public async Task<IActionResult> DeleteUser(string userId)
+    public async Task<IActionResult> DeleteUser(string userId, [FromQuery] string organizationId)
     {
-        if (!Request.Headers.TryGetOrganizationId(out var orgId))
+        // KD-06: org id is supplied per request as the explicit organizationId query param.
+        if (string.IsNullOrWhiteSpace(organizationId))
         {
             return Unauthorized();
         }
+        var orgId = organizationId;
 
         if (User.Identity?.IsAuthenticated == true)
         {
@@ -108,24 +119,28 @@ public class OrganizationManagementController : ControllerBase
 
     [HttpGet("DeviceGroup")]
     [ServiceFilter(typeof(ApiAuthorizationFilter))]
-    public IActionResult DeviceGroup()
+    public IActionResult DeviceGroup([FromQuery] string organizationId)
     {
-        if (!Request.Headers.TryGetOrganizationId(out var orgId))
+        // KD-06: org id is supplied per request as the explicit organizationId query param.
+        if (string.IsNullOrWhiteSpace(organizationId))
         {
             return Unauthorized();
         }
+        var orgId = organizationId;
 
         return Ok(_dataService.GetDeviceGroupsForOrganization(orgId));
     }
 
     [HttpDelete("DeviceGroup")]
     [ServiceFilter(typeof(ApiAuthorizationFilter))]
-    public async Task<IActionResult> DeviceGroup([FromBody] string deviceGroupId)
+    public async Task<IActionResult> DeviceGroup([FromBody] string deviceGroupId, [FromQuery] string organizationId)
     {
-        if (!Request.Headers.TryGetOrganizationId(out var orgId))
+        // KD-06: org id is supplied per request as the explicit organizationId query param.
+        if (string.IsNullOrWhiteSpace(organizationId))
         {
             return Unauthorized();
         }
+        var orgId = organizationId;
 
         var result = await _dataService.DeleteDeviceGroup(orgId, deviceGroupId.Trim());
         _logger.LogResult(result);
@@ -138,12 +153,14 @@ public class OrganizationManagementController : ControllerBase
 
     [HttpPost("DeviceGroup")]
     [ServiceFilter(typeof(ApiAuthorizationFilter))]
-    public async Task<IActionResult> DeviceGroup([FromBody] DeviceGroup deviceGroup)
+    public async Task<IActionResult> DeviceGroup([FromBody] DeviceGroup deviceGroup, [FromQuery] string organizationId)
     {
-        if (!Request.Headers.TryGetOrganizationId(out var orgId))
+        // KD-06: org id is supplied per request as the explicit organizationId query param.
+        if (string.IsNullOrWhiteSpace(organizationId))
         {
             return Unauthorized();
         }
+        var orgId = organizationId;
 
         if (!ModelState.IsValid)
         {
@@ -160,12 +177,14 @@ public class OrganizationManagementController : ControllerBase
 
     [HttpDelete("DeviceGroup/{groupID}/Users/")]
     [ServiceFilter(typeof(ApiAuthorizationFilter))]
-    public async Task<IActionResult> DeviceGroupRemoveUser([FromBody] string userID, string groupID)
+    public async Task<IActionResult> DeviceGroupRemoveUser([FromBody] string userID, string groupID, [FromQuery] string organizationId)
     {
-        if (!Request.Headers.TryGetOrganizationId(out var orgId))
+        // KD-06: org id is supplied per request as the explicit organizationId query param.
+        if (string.IsNullOrWhiteSpace(organizationId))
         {
             return Unauthorized();
         }
+        var orgId = organizationId;
 
         if (!ModelState.IsValid)
         {
@@ -181,12 +200,14 @@ public class OrganizationManagementController : ControllerBase
 
     [HttpPost("DeviceGroup/{groupID}/Users/")]
     [ServiceFilter(typeof(ApiAuthorizationFilter))]
-    public IActionResult DeviceGroupAddUser([FromBody] string userID, string groupID)
+    public IActionResult DeviceGroupAddUser([FromBody] string userID, string groupID, [FromQuery] string organizationId)
     {
-        if (!Request.Headers.TryGetOrganizationId(out var orgId))
+        // KD-06: org id is supplied per request as the explicit organizationId query param.
+        if (string.IsNullOrWhiteSpace(organizationId))
         {
             return Unauthorized();
         }
+        var orgId = organizationId;
 
         if (!ModelState.IsValid)
         {
@@ -204,12 +225,14 @@ public class OrganizationManagementController : ControllerBase
 
     [HttpGet("GenerateResetUrl/{userID}")]
     [ServiceFilter(typeof(ApiAuthorizationFilter))]
-    public async Task<IActionResult> GenerateResetUrl(string userId)
+    public async Task<IActionResult> GenerateResetUrl(string userId, [FromQuery] string organizationId)
     {
-        if (!Request.Headers.TryGetOrganizationId(out var orgId))
+        // KD-06: org id is supplied per request as the explicit organizationId query param.
+        if (string.IsNullOrWhiteSpace(organizationId))
         {
             return Unauthorized();
         }
+        var orgId = organizationId;
 
         var user = await _userManager.FindByIdAsync(userId);
 
@@ -218,7 +241,9 @@ public class OrganizationManagementController : ControllerBase
             return NotFound();
         }
 
-        if (user.OrganizationID != orgId)
+        // Multi-tenant refactor: confirm the user is a member of the target org.
+        var membership = await _dataService.GetMembership(orgId, user.Id);
+        if (membership is null && !user.IsServerAdmin)
         {
             return Unauthorized();
         }
@@ -237,12 +262,14 @@ public class OrganizationManagementController : ControllerBase
 
     [HttpPut("Name")]
     [ServiceFilter(typeof(ApiAuthorizationFilter))]
-    public async Task<IActionResult> Name([FromBody] string organizationName)
+    public async Task<IActionResult> Name([FromBody] string organizationName, [FromQuery] string organizationId)
     {
-        if (!Request.Headers.TryGetOrganizationId(out var orgId))
+        // KD-06: org id is supplied per request as the explicit organizationId query param.
+        if (string.IsNullOrWhiteSpace(organizationId))
         {
             return Unauthorized();
         }
+        var orgId = organizationId;
 
         if (organizationName.Length > 25)
         {
@@ -260,12 +287,14 @@ public class OrganizationManagementController : ControllerBase
 
     [HttpPut("SetDefault")]
     [ServiceFilter(typeof(ApiAuthorizationFilter))]
-    public async Task<IActionResult> SetDefault([FromBody] bool isDefault)
+    public async Task<IActionResult> SetDefault([FromBody] bool isDefault, [FromQuery] string organizationId)
     {
-        if (!Request.Headers.TryGetOrganizationId(out var orgId))
+        // KD-06: org id is supplied per request as the explicit organizationId query param.
+        if (string.IsNullOrWhiteSpace(organizationId))
         {
             return Unauthorized();
         }
+        var orgId = organizationId;
 
         await _dataService.SetIsDefaultOrganization(orgId, isDefault);
         return NoContent();
@@ -273,12 +302,14 @@ public class OrganizationManagementController : ControllerBase
 
     [HttpPost("SendInvite")]
     [ServiceFilter(typeof(ApiAuthorizationFilter))]
-    public async Task<IActionResult> SendInvite([FromBody] InviteViewModel invite)
+    public async Task<IActionResult> SendInvite([FromBody] InviteViewModel invite, [FromQuery] string organizationId)
     {
-        if (!Request.Headers.TryGetOrganizationId(out var orgId))
+        // KD-06: org id is supplied per request as the explicit organizationId query param.
+        if (string.IsNullOrWhiteSpace(organizationId))
         {
             return Unauthorized();
         }
+        var orgId = organizationId;
 
         if (!ModelState.IsValid || string.IsNullOrWhiteSpace(invite.InvitedUser))
         {
@@ -286,52 +317,48 @@ public class OrganizationManagementController : ControllerBase
         }
 
 
-        if (!_dataService.DoesUserExist(invite.InvitedUser))
+        // KD-03: invitations are reserved for new (not-yet-registered) users.
+        // Existing users are directly added to the org via FR-08 — no email.
+        if (_dataService.DoesUserExist(invite.InvitedUser))
         {
-            var result = await _dataService.CreateUser(invite.InvitedUser, invite.IsAdmin, orgId);
-            if (!result.IsSuccess)
+            var existing = await _dataService.GetUserByName(invite.InvitedUser);
+            if (!existing.IsSuccess)
             {
-                return BadRequest("There was an issue creating the new account.");
+                return BadRequest("Existing user lookup failed.");
             }
-
-            var user = await _userManager.FindByEmailAsync(invite.InvitedUser);
-
-            if (user is null)
+            var addResult = await _dataService.AddUserToOrganization(orgId, existing.Value.Id);
+            if (!addResult.IsSuccess)
             {
-                return BadRequest("User not found.");
+                return BadRequest(addResult.Reason);
             }
-
-            await _userManager.ConfirmEmailAsync(user, await _userManager.GenerateEmailConfirmationTokenAsync(user));
-
-            return Ok();
-        }
-        else
-        {
-            var newInvite = await _dataService.AddInvite(orgId, invite);
-
-            if (!newInvite.IsSuccess)
-            {
-                return BadRequest(newInvite.Reason);
-            }
-
-            var inviteURL = $"{Request.Scheme}://{Request.Host}/Invite/{newInvite.Value.ID}";
-            var emailResult = await _emailSender.SendEmailAsync(invite.InvitedUser, "Invitation to Organization in Remotely",
-                        $@"<img src='{Request.Scheme}://{Request.Host}/images/Remotely_Logo.png'/>
-                            <br><br>
-                            Hello!
-                            <br><br>
-                            You've been invited to join an organization in Remotely.
-                            <br><br>
-                            You can join the organization by <a href='{HtmlEncoder.Default.Encode(inviteURL)}'>clicking here</a>.",
-                        orgId);
-
-            if (!emailResult)
-            {
-                return Problem("There was an error sending the invitation email.");
-            }
-
             return Ok();
         }
 
+        // KD-04: invitees always receive base privileges (IsAdmin removed from InviteViewModel).
+        var newInvite = await _dataService.AddInvite(orgId, invite);
+        if (!newInvite.IsSuccess)
+        {
+            return BadRequest(newInvite.Reason);
+        }
+
+        var inviteURL = $"{Request.Scheme}://{Request.Host}/Invite/{newInvite.Value.ID}";
+        var emailResult = await _emailSender.SendEmailAsync(
+            invite.InvitedUser,
+            "Invitation to Organization in Remotely",
+            $@"<img src='{Request.Scheme}://{Request.Host}/images/Remotely_Logo.png'/>
+                <br><br>
+                Hello!
+                <br><br>
+                You've been invited to join an organization in Remotely.
+                <br><br>
+                You can join the organization by <a href='{HtmlEncoder.Default.Encode(inviteURL)}'>clicking here</a>.",
+            null);
+
+        if (!emailResult)
+        {
+            return Problem("There was an error sending the invitation email.");
+        }
+
+        return Ok();
     }
 }

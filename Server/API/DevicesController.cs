@@ -1,10 +1,10 @@
-﻿using Remotely.Shared.Extensions;
 using Microsoft.AspNetCore.Http.Extensions;
 using Microsoft.AspNetCore.Mvc;
 using Remotely.Server.Auth;
 using Remotely.Server.Extensions;
 using Remotely.Server.Services;
 using Remotely.Shared.Entities;
+using Remotely.Shared.Extensions;
 using Remotely.Shared.Models;
 
 namespace Remotely.Server.API;
@@ -24,30 +24,42 @@ public class DevicesController : ControllerBase
         _logger = logger;
     }
 
-
+    /// <summary>
+    /// Per KD-06: target org is supplied per request as the explicit
+    /// <c>organizationId</c> query parameter (FR-25). The previous header-based
+    /// scheme (populated by ApiAuthorizationFilter from a per-token OrganizationID)
+    /// is gone — see FR-28.
+    /// </summary>
     [HttpGet]
     [ServiceFilter(typeof(ApiAuthorizationFilter))]
-    public IEnumerable<Device> Get()
+    public async Task<IEnumerable<Device>> Get([FromQuery] string organizationId)
     {
-        if (!Request.Headers.TryGetOrganizationId(out var orgId))
+        if (string.IsNullOrWhiteSpace(organizationId))
         {
             return Array.Empty<Device>();
         }
 
         if (User.Identity?.IsAuthenticated == true)
         {
-            return _dataService.GetDevicesForUser($"{User.Identity.Name}");
+            var userResult = await _dataService.GetUserByName($"{User.Identity.Name}");
+            if (!userResult.IsSuccess)
+            {
+                return Array.Empty<Device>();
+            }
+
+            var isOrgAdmin = await IsOrgAdminAsync(userResult.Value, organizationId);
+            return _dataService.GetDevicesForUser($"{User.Identity.Name}", organizationId, isOrgAdmin);
         }
 
-        // Authorized with API key.  Return all.
-        return _dataService.GetAllDevices(orgId);
+        // Authorized with API key — return all devices for the org.
+        return _dataService.GetAllDevices(organizationId);
     }
 
     [ServiceFilter(typeof(ApiAuthorizationFilter))]
     [HttpGet("{id}")]
-    public async Task<ActionResult<Device>> Get(string id)
+    public async Task<ActionResult<Device>> Get(string id, [FromQuery] string organizationId)
     {
-        if (!Request.Headers.TryGetOrganizationId(out var orgId))
+        if (string.IsNullOrWhiteSpace(organizationId))
         {
             return Unauthorized();
         }
@@ -62,13 +74,15 @@ public class DevicesController : ControllerBase
                 return Unauthorized();
             }
 
-            if (!_dataService.DoesUserHaveAccessToDevice(id, userResult.Value))
+            var isOrgAdmin = await IsOrgAdminAsync(userResult.Value, organizationId);
+
+            if (!_dataService.DoesUserHaveAccessToDevice(id, userResult.Value, organizationId, isOrgAdmin))
             {
                 return Unauthorized();
             }
         }
 
-        var deviceResult = await _dataService.GetDevice(orgId, id);
+        var deviceResult = await _dataService.GetDevice(organizationId, id);
         _logger.LogResult(deviceResult);
 
         if (!deviceResult.IsSuccess)
@@ -81,18 +95,17 @@ public class DevicesController : ControllerBase
 
     [HttpPut]
     [ServiceFilter(typeof(ApiAuthorizationFilter))]
-    public async Task<IActionResult> Update([FromBody] DeviceSetupOptions deviceOptions)
+    public async Task<IActionResult> Update([FromBody] DeviceSetupOptions deviceOptions, [FromQuery] string organizationId)
     {
-        if (!Request.Headers.TryGetOrganizationId(out var orgId))
+        if (string.IsNullOrWhiteSpace(organizationId))
         {
             return Unauthorized();
         }
-        
+
         if (string.IsNullOrWhiteSpace(deviceOptions?.DeviceID))
         {
             return BadRequest("DeviceId is required.");
         }
-
 
         if (User.Identity?.IsAuthenticated == true)
         {
@@ -104,14 +117,15 @@ public class DevicesController : ControllerBase
                 return Unauthorized();
             }
 
-            if (!_dataService.DoesUserHaveAccessToDevice(deviceOptions.DeviceID, userResult.Value))
+            var isOrgAdmin = await IsOrgAdminAsync(userResult.Value, organizationId);
+
+            if (!_dataService.DoesUserHaveAccessToDevice(deviceOptions.DeviceID, userResult.Value, organizationId, isOrgAdmin))
             {
                 return Unauthorized();
             }
-
         }
 
-        var deviceResult = await _dataService.UpdateDevice(deviceOptions, orgId);
+        var deviceResult = await _dataService.UpdateDevice(deviceOptions, organizationId);
         _logger.LogResult(deviceResult);
 
         if (!deviceResult.IsSuccess)
@@ -132,5 +146,19 @@ public class DevicesController : ControllerBase
             return BadRequest("Device already exists.  Use Put with authorization to update the device.");
         }
         return Created(Request.GetDisplayUrl(), result.Value);
+    }
+
+    /// <summary>
+    /// FR-18 / KD-02: server admin implies org admin everywhere; otherwise check
+    /// the membership record for the active org.
+    /// </summary>
+    private async Task<bool> IsOrgAdminAsync(RemotelyUser user, string organizationId)
+    {
+        if (user.IsServerAdmin)
+        {
+            return true;
+        }
+        var membership = await _dataService.GetMembership(organizationId, user.Id);
+        return membership?.IsAdministrator == true;
     }
 }

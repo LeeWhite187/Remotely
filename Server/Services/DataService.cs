@@ -2,9 +2,11 @@
 using Microsoft.AspNetCore.Components.Forms;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
+using Bitbound.SimpleMessenger;
 using Remotely.Server.Data;
 using Remotely.Server.Extensions;
 using Remotely.Server.Models;
+using Remotely.Server.Models.Messages;
 using Remotely.Shared;
 using Remotely.Shared.Dtos;
 using Remotely.Shared.Entities;
@@ -25,7 +27,7 @@ public interface IDataService
 
     Task<Result<Device>> AddOrUpdateDevice(DeviceClientDto device);
 
-    Task<Result> AddOrUpdateSavedScript(SavedScript script, string userId);
+    Task<Result> AddOrUpdateSavedScript(SavedScript script, string userId, string organizationId);
 
     Task AddOrUpdateScriptSchedule(ScriptSchedule schedule);
 
@@ -40,13 +42,18 @@ public interface IDataService
 
     bool AddUserToDeviceGroup(string orgId, string groupId, string userName, out string resultMessage);
 
-    Task ChangeUserIsAdmin(string organizationId, string targetUserId, bool isAdmin);
+    // NEW (FR-08): direct-add an existing user to an org with base privileges.
+    Task<Result> AddUserToOrganization(string orgId, string userId);
 
     Task CleanupOldRecords();
 
+    // FR-28 / KD-05: token is identity-only; OrganizationID is set null.
     Task<Result<ApiToken>> CreateApiToken(string userName, string tokenName, string secretHash);
 
     Task<Result<Device>> CreateDevice(DeviceSetupOptions options);
+
+    // NEW (FR-23): server-admin org creation.
+    Task<Result<Organization>> CreateOrganization(string organizationName);
 
     Task<Result> CreateUser(string userEmail, bool isAdmin, string organizationId);
 
@@ -54,6 +61,7 @@ public interface IDataService
 
     Task DeleteAllAlerts(string orgId, string? userName = null);
 
+    // FR-28: tokens belong to users; scope by userId only.
     Task<Result> DeleteApiToken(string userName, string tokenId);
 
     Task<Result> DeleteDeviceGroup(string orgId, string deviceGroupId);
@@ -70,7 +78,7 @@ public interface IDataService
 
     bool DoesUserExist(string userName);
 
-    bool DoesUserHaveAccessToDevice(string deviceId, RemotelyUser remotelyUser);
+    bool DoesUserHaveAccessToDevice(string deviceId, RemotelyUser remotelyUser, string organizationId, bool isOrgAdmin);
 
     bool DoesUserHaveAccessToDevice(string deviceId, string remotelyUserId);
 
@@ -82,6 +90,7 @@ public interface IDataService
 
     Alert[] GetAlerts(string userId);
 
+    // FR-28: tokens are user-scoped; no org filter.
     ApiToken[] GetAllApiTokens(string userId);
 
     ScriptResult[] GetAllCommandResults(string orgId);
@@ -91,6 +100,9 @@ public interface IDataService
     Device[] GetAllDevices(string orgId);
 
     InviteLink[] GetAllInviteLinks(string organizationId);
+
+    // NEW (FR-05, FR-22): all orgs on the server.
+    Task<IReadOnlyList<Organization>> GetAllOrganizations();
 
     ScriptResult[] GetAllScriptResults(string orgId, string deviceId);
 
@@ -114,31 +126,35 @@ public interface IDataService
 
     int GetDeviceCount();
 
-    int GetDeviceCount(RemotelyUser user);
+    int GetDeviceCount(string organizationId);
 
     Task<Result<DeviceGroup>> GetDeviceGroup(
         string deviceGroupId,
         bool includeDevices = false,
         bool includeUsers = false);
 
-    DeviceGroup[] GetDeviceGroups(string username);
+    // §8.1: explicit organizationId and isOrgAdmin per FR-25.
+    DeviceGroup[] GetDeviceGroups(string username, string organizationId, bool isOrgAdmin);
 
     DeviceGroup[] GetDeviceGroupsForOrganization(string organizationId);
 
     List<Device> GetDevices(IEnumerable<string> deviceIds);
 
-    Device[] GetDevicesForUser(string userName);
+    // §8.1: explicit organizationId per FR-25.
+    Device[] GetDevicesForUser(string userName, string organizationId, bool isOrgAdmin);
+
+    // NEW: utility for callers needing a single membership record.
+    Task<UserOrganizationMembership?> GetMembership(string orgId, string userId);
+
+    // NEW: used by IActiveOrganizationContext on circuit initialization.
+    Task<IReadOnlyList<UserOrganizationMembership>> GetMembershipsForUser(string userId);
 
     Task<Result<Organization>> GetOrganizationById(string organizationId);
-
-    Task<Result<Organization>> GetOrganizationByUserName(string userName);
 
     int GetOrganizationCount();
     Task<int> GetOrganizationCountAsync();
 
     Task<Result<string>> GetOrganizationNameById(string organizationId);
-
-    Task<Result<string>> GetOrganizationNameByUserName(string userName);
 
     Task<IEnumerable<ScriptRun>> GetPendingScriptRuns(string deviceId);
 
@@ -169,7 +185,7 @@ public interface IDataService
     Task<Result<RemotelyUser>> GetUserById(string userId);
 
     Task<Result<RemotelyUser>> GetUserByName(
-        string userName, 
+        string userName,
         Action<IQueryable<RemotelyUser>>? queryBuilder = null);
 
     Task<Result<RemotelyUserOptions>> GetUserOptions(string userName);
@@ -180,6 +196,10 @@ public interface IDataService
 
     Task<bool> RemoveUserFromDeviceGroup(string orgId, string groupId, string userId);
 
+    // NEW (FR-20): remove user from org with FR-15 + FR-24 enforcement.
+    Task<Result> RemoveUserFromOrganization(string orgId, string userId);
+
+    // FR-28: tokens belong to users; scope by userId only.
     Task<Result> RenameApiToken(string userName, string tokenId, string tokenName);
 
     Task ResetBranding(string organizationId);
@@ -193,6 +213,12 @@ public interface IDataService
     Task SetIsDefaultOrganization(string orgId, bool isDefault);
 
     Task SetIsServerAdmin(string targetUserId, bool isServerAdmin, string callerUserId);
+
+    // NEW (FR-15): replaces ChangeUserIsAdmin; enforces last-admin lockout prevention.
+    Task<Result> SetMemberIsAdmin(string orgId, string userId, bool isAdmin);
+
+    // NEW (FR-21): grant/revoke invite privilege.
+    Task<Result> SetMemberCanInvite(string orgId, string userId, bool canInvite);
 
     void SetServerVerificationToken(string deviceId, string verificationToken);
 
@@ -220,16 +246,46 @@ public class DataService : IDataService
     private readonly IAppDbFactory _appDbFactory;
     private readonly IHostEnvironment _hostEnvironment;
     private readonly ILogger<DataService> _logger;
+    private readonly IMessenger _messenger;
     private readonly SemaphoreSlim _settingsLock = new(1, 1);
 
     public DataService(
         IHostEnvironment hostEnvironment,
         IAppDbFactory appDbFactory,
+        IMessenger messenger,
         ILogger<DataService> logger)
     {
         _hostEnvironment = hostEnvironment;
         _appDbFactory = appDbFactory;
+        _messenger = messenger;
         _logger = logger;
+    }
+
+    /// <summary>
+    /// Per spec FR-14 / §8.3: notify any connected circuits for the affected user
+    /// that their membership state has changed. The message is broadcast on the
+    /// user-id channel; every <see cref="IActiveOrganizationContext"/> subscribes
+    /// on its own user id and re-queries on receipt.
+    /// </summary>
+    /// <remarks>
+    /// The channel is the user id rather than the connection id to avoid a DI
+    /// cycle (ActiveOrganizationContext otherwise would need ICircuitConnection,
+    /// which itself depends on IActiveOrganizationContext in circuit code).
+    /// </remarks>
+    private async Task NotifyMembershipChanged(string userId)
+    {
+        if (string.IsNullOrWhiteSpace(userId))
+        {
+            return;
+        }
+        try
+        {
+            await _messenger.Send(new MembershipChangedMessage(userId), userId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to send MembershipChangedMessage for user {UserId}.", userId);
+        }
     }
 
     public async Task AddAlert(string deviceId, string organizationId, string alertMessage, string? details = null)
@@ -238,7 +294,7 @@ public class DataService : IDataService
 
         var users = dbContext.Users
            .Include(x => x.Alerts)
-           .Where(x => x.OrganizationID == organizationId);
+           .Where(x => x.Memberships.Any(m => m.OrganizationId == organizationId));
 
         if (!string.IsNullOrWhiteSpace(deviceId))
         {
@@ -338,11 +394,11 @@ public class DataService : IDataService
             return Result.Fail<InviteLink>("Organization not found.");
         }
 
+        // KD-04: invitees always receive base privileges; InviteLink.IsAdmin removed (FR-19 / §6.1).
         var inviteLink = new InviteLink()
         {
             InvitedUser = invite.InvitedUser?.ToLower(),
             DateSent = DateTimeOffset.Now,
-            IsAdmin = invite.IsAdmin,
             Organization = organization,
             OrganizationID = organization.ID,
         };
@@ -411,7 +467,7 @@ public class DataService : IDataService
         return Result.Ok(device);
     }
 
-    public async Task<Result> AddOrUpdateSavedScript(SavedScript script, string userId)
+    public async Task<Result> AddOrUpdateSavedScript(SavedScript script, string userId, string organizationId)
     {
         using var dbContext = _appDbFactory.GetContext();
 
@@ -427,7 +483,7 @@ public class DataService : IDataService
 
             script.CreatorId = user.Id;
             script.Creator = user;
-            script.OrganizationID = user.OrganizationID;
+            script.OrganizationID = organizationId;
         }
 
         await dbContext.SaveChangesAsync();
@@ -597,7 +653,7 @@ public class DataService : IDataService
             .Include(x => x.DeviceGroups)
             .FirstOrDefault(x =>
                 x.UserName!.ToLower() == userName &&
-                x.OrganizationID == orgId);
+                x.Memberships.Any(m => m.OrganizationId == orgId));
 
         if (user == null)
         {
@@ -621,20 +677,7 @@ public class DataService : IDataService
         return true;
     }
 
-    public async Task ChangeUserIsAdmin(string organizationId, string targetUserId, bool isAdmin)
-    {
-        using var dbContext = _appDbFactory.GetContext();
-
-        var targetUser = await dbContext.Users.FirstOrDefaultAsync(x =>
-                            x.OrganizationID == organizationId &&
-                            x.Id == targetUserId);
-
-        if (targetUser != null)
-        {
-            targetUser.IsAdministrator = isAdmin;
-            dbContext.SaveChanges();
-        }
-    }
+    // ChangeUserIsAdmin was removed per §8.1 — superseded by SetMemberIsAdmin.
 
     public async Task CleanupOldRecords()
     {
@@ -685,11 +728,15 @@ public class DataService : IDataService
         {
             return Result.Fail<ApiToken>("User not found.");
         }
-        
+
+        // FR-28 / KD-05: tokens are identity-only; OrganizationID is null on new tokens.
+        // CreatorId binds the token to the issuing user; the target org is supplied
+        // per-request via an explicit organizationId parameter.
         var newToken = new ApiToken()
         {
             Name = tokenName,
-            OrganizationID = user.OrganizationID,
+            OrganizationID = null,
+            CreatorId = user.Id,
             Secret = secretHash
         };
         dbContext.ApiTokens.Add(newToken);
@@ -749,17 +796,8 @@ public class DataService : IDataService
 
         try
         {
-            var user = new RemotelyUser()
-            {
-                UserName = userEmail.Trim().ToLower(),
-                Email = userEmail.Trim().ToLower(),
-                IsAdministrator = isAdmin,
-                OrganizationID = organizationId,
-                UserOptions = new RemotelyUserOptions(),
-                LockoutEnabled = true
-            };
             var org = dbContext.Organizations
-                .Include(x => x.RemotelyUsers)
+                .Include(x => x.Memberships)
                 .FirstOrDefault(x => x.ID == organizationId);
 
             if (org is null)
@@ -767,8 +805,29 @@ public class DataService : IDataService
                 return Result.Fail("Organization not found.");
             }
 
+            var user = new RemotelyUser()
+            {
+                UserName = userEmail.Trim().ToLower(),
+                Email = userEmail.Trim().ToLower(),
+                UserOptions = new RemotelyUserOptions(),
+                LockoutEnabled = true
+            };
+
             dbContext.Users.Add(user);
-            org.RemotelyUsers.Add(user);
+            // Note: CreateUser is a server-side seed/admin operation (not the invite or
+            // direct-add flow). KD-04's base-privilege-default applies to FR-08 / FR-09;
+            // here the caller is the server admin explicitly setting the admin flag.
+            var membership = new UserOrganizationMembership
+            {
+                User = user,
+                UserId = user.Id,
+                Organization = org,
+                OrganizationId = org.ID,
+                IsAdministrator = isAdmin,
+                CanInvite = false
+            };
+            org.Memberships.Add(membership);
+            dbContext.UserOrganizationMemberships.Add(membership);
             await dbContext.SaveChangesAsync();
             return Result.Ok();
         }
@@ -819,9 +878,9 @@ public class DataService : IDataService
             return Result.Fail("User not found.");
         }
 
+        // FR-28: tokens belong to users; scope by CreatorId.
         var token = dbContext.ApiTokens.FirstOrDefault(x =>
-            x.OrganizationID == user.OrganizationID &&
-            x.ID == tokenId);
+            x.ID == tokenId && x.CreatorId == user.Id);
 
         if (token is null)
         {
@@ -950,7 +1009,7 @@ public class DataService : IDataService
 
         var org = dbContext
             .Organizations
-            .Include(x => x.RemotelyUsers)
+            .Include(x => x.Memberships)
             .FirstOrDefault(x => x.ID == orgId);
 
         if (org is null)
@@ -964,7 +1023,7 @@ public class DataService : IDataService
         var target = dbContext.Users
             .Include(x => x.DeviceGroups)
             .ThenInclude(x => x.Devices)
-            .Include(x => x.Organization)
+            .Include(x => x.Memberships)
             .Include(x => x.Alerts)
             .Include(x => x.SavedScripts)
             .ThenInclude(x => x.ScriptRuns)
@@ -975,7 +1034,7 @@ public class DataService : IDataService
             .ThenInclude(x => x.Results)
             .FirstOrDefault(x =>
                 x.Id == targetUserId &&
-                x.OrganizationID == orgId);
+                x.Memberships.Any(m => m.OrganizationId == orgId));
 
         if (target is null)
         {
@@ -1015,7 +1074,7 @@ public class DataService : IDataService
             .Any(x => x.UserName!.Trim().ToLower() == userName.Trim().ToLower());
     }
 
-    public bool DoesUserHaveAccessToDevice(string deviceId, RemotelyUser remotelyUser)
+    public bool DoesUserHaveAccessToDevice(string deviceId, RemotelyUser remotelyUser, string organizationId, bool isOrgAdmin)
     {
         if (remotelyUser is null)
         {
@@ -1027,11 +1086,11 @@ public class DataService : IDataService
         return dbContext.Devices
             .Include(x => x.DeviceGroup)
             .ThenInclude(x => x!.Users)
-            .Any(device => 
-                device.OrganizationID == remotelyUser.OrganizationID &&
+            .Any(device =>
+                device.OrganizationID == organizationId &&
                 device.ID == deviceId &&
                 (
-                    remotelyUser.IsAdministrator ||
+                    isOrgAdmin ||
                     device.DeviceGroup!.Users.Any(user => user.Id == remotelyUser.Id
                 )));
     }
@@ -1040,30 +1099,72 @@ public class DataService : IDataService
     {
         using var dbContext = _appDbFactory.GetContext();
 
-        var remotelyUser = dbContext.Users.Find(remotelyUserId);
+        // Look up the device first so we know which org we're checking against.
+        var device = dbContext.Devices
+            .Include(x => x.DeviceGroup)
+            .ThenInclude(x => x!.Users)
+            .FirstOrDefault(x => x.ID == deviceId);
+
+        if (device is null || string.IsNullOrWhiteSpace(device.OrganizationID))
+        {
+            return false;
+        }
+
+        var remotelyUser = dbContext.Users
+            .Include(x => x.Memberships)
+            .FirstOrDefault(x => x.Id == remotelyUserId);
 
         if (remotelyUser is null)
         {
             return false;
         }
 
-        return DoesUserHaveAccessToDevice(deviceId, remotelyUser);
+        // Server admins implicitly have access to any device (FR-18).
+        if (remotelyUser.IsServerAdmin)
+        {
+            return true;
+        }
+
+        // Check the user's membership in the device's org.
+        var membership = remotelyUser.Memberships.FirstOrDefault(m => m.OrganizationId == device.OrganizationID);
+        if (membership is null)
+        {
+            return false;
+        }
+
+        if (membership.IsAdministrator)
+        {
+            return true;
+        }
+
+        // Otherwise, user must have an explicit DeviceGroup assignment that includes this device.
+        return device.DeviceGroup?.Users.Any(u => u.Id == remotelyUserId) == true;
     }
 
     public string[] FilterDeviceIdsByUserPermission(string[] deviceIds, RemotelyUser remotelyUser)
     {
+        if (remotelyUser is null)
+        {
+            return Array.Empty<string>();
+        }
+
         using var dbContext = _appDbFactory.GetContext();
+
+        var userId = remotelyUser.Id;
+        var isServerAdmin = remotelyUser.IsServerAdmin;
 
         return dbContext.Devices
             .Include(x => x.DeviceGroup)
             .ThenInclude(x => x!.Users)
             .Where(device =>
-                device.OrganizationID == remotelyUser.OrganizationID &&
                 deviceIds.Contains(device.ID) &&
                 (
-                    remotelyUser.IsAdministrator ||
-                    device.DeviceGroup!.Users.Any(user => user.Id == remotelyUser.Id
-                )))
+                    isServerAdmin ||
+                    dbContext.UserOrganizationMemberships.Any(m =>
+                        m.UserId == userId &&
+                        m.OrganizationId == device.OrganizationID &&
+                        (m.IsAdministrator || device.DeviceGroup!.Users.Any(u => u.Id == userId)))
+                ))
             .Select(x => x.ID)
             .ToArray();
     }
@@ -1110,16 +1211,10 @@ public class DataService : IDataService
     {
         using var dbContext = _appDbFactory.GetContext();
 
-        var user = dbContext.Users.FirstOrDefault(x => x.Id == userId);
-
-        if (user is null)
-        {
-            return Array.Empty<ApiToken>();
-        }
-
+        // FR-28: tokens are user-scoped via CreatorId; no org filter.
         return dbContext.ApiTokens
             .AsNoTracking()
-            .Where(x => x.OrganizationID == user.OrganizationID)
+            .Where(x => x.CreatorId == userId)
             .OrderByDescending(x => x.LastUsed)
             .ToArray();
     }
@@ -1208,17 +1303,13 @@ public class DataService : IDataService
 
         using var dbContext = _appDbFactory.GetContext();
 
-        var organization = await dbContext.Organizations
+        // Include Memberships so callers can read per-org role flags (e.g. for the
+        // ManageOrganization admin checkbox) without an extra query per row.
+        return await dbContext.Users
             .AsNoTracking()
-            .Include(x => x.RemotelyUsers)
-            .FirstOrDefaultAsync(x => x.ID == orgId);
-
-        if (organization is null)
-        {
-            return Array.Empty<RemotelyUser>();
-        }
-
-        return organization.RemotelyUsers.ToArray();
+            .Include(u => u.Memberships)
+            .Where(u => u.Memberships.Any(m => m.OrganizationId == orgId))
+            .ToArrayAsync();
     }
 
     public async Task<Result<ApiToken>> GetApiKey(string keyId)
@@ -1334,23 +1425,13 @@ public class DataService : IDataService
         return dbContext.Devices.Count();
     }
 
-    public int GetDeviceCount(RemotelyUser user)
+    public int GetDeviceCount(string organizationId)
     {
         using var dbContext = _appDbFactory.GetContext();
 
-        if (user.IsAdministrator)
-        {
-            return GetDeviceCount();
-        }
-
-        return dbContext.Users
+        return dbContext.Devices
             .AsNoTracking()
-            .Include(x => x.DeviceGroups)
-            .ThenInclude(x => x.Devices)
-            .Where(x => x.Id == user.Id)
-            .SelectMany(x => x.DeviceGroups)
-            .SelectMany(x => x.Devices)
-            .Count();
+            .Count(x => x.OrganizationID == organizationId);
     }
 
     public async Task<Result<DeviceGroup>> GetDeviceGroup(
@@ -1382,7 +1463,7 @@ public class DataService : IDataService
         return Result.Ok(group);
     }
 
-    public DeviceGroup[] GetDeviceGroups(string username)
+    public DeviceGroup[] GetDeviceGroups(string username, string organizationId, bool isOrgAdmin)
     {
         using var dbContext = _appDbFactory.GetContext();
 
@@ -1401,10 +1482,10 @@ public class DataService : IDataService
             .Include(x => x.Users)
             .ThenInclude(x => x.DeviceGroups)
             .Where(x =>
-                x.OrganizationID == user.OrganizationID &&
+                x.OrganizationID == organizationId &&
                 (
-                    user.IsAdministrator ||
-                    x.Users.Any(x => x.Id == userId)
+                    isOrgAdmin ||
+                    x.Users.Any(u => u.Id == userId)
                 )
             )
             .Select(x => x.ID)
@@ -1444,7 +1525,7 @@ public class DataService : IDataService
             .ToList();
     }
 
-    public Device[] GetDevicesForUser(string userName)
+    public Device[] GetDevicesForUser(string userName, string organizationId, bool isOrgAdmin)
     {
         using var dbContext = _appDbFactory.GetContext();
 
@@ -1453,20 +1534,11 @@ public class DataService : IDataService
             return Array.Empty<Device>();
         }
 
-        var user = dbContext.Users
-            .AsNoTracking()
-            .FirstOrDefault(x => x.UserName == userName);
-
-        if (user is null)
-        {
-            return Array.Empty<Device>();
-        }
-
-        if (user.IsAdministrator)
+        if (isOrgAdmin)
         {
             return dbContext.Devices
                 .AsNoTracking()
-                .Where(x => x.OrganizationID == user.OrganizationID)
+                .Where(x => x.OrganizationID == organizationId)
                 .ToArray();
         }
 
@@ -1476,7 +1548,8 @@ public class DataService : IDataService
             .ThenInclude(x => x.Devices)
             .Where(x => x.UserName == userName)
             .SelectMany(x => x.DeviceGroups)
-            .SelectMany(x => x.Devices)
+            .Where(g => g.OrganizationID == organizationId)
+            .SelectMany(g => g.Devices)
             .ToArray();
     }
 
@@ -1494,27 +1567,10 @@ public class DataService : IDataService
     }
 
 
-    public async Task<Result<Organization>> GetOrganizationByUserName(string userName)
-    {
-        if (string.IsNullOrWhiteSpace(userName))
-        {
-            return Result.Fail<Organization>("User name is required.");
-        }
-
-        using var dbContext = _appDbFactory.GetContext();
-
-        var user = await dbContext.Users
-            .AsNoTracking()
-            .Include(x => x.Organization)
-            .FirstOrDefaultAsync(x => x.UserName!.ToLower() == userName.ToLower());
-
-        if (user?.Organization is null)
-        {
-            return Result.Fail<Organization>("User not found.");
-        }
-
-        return Result.Ok(user.Organization);
-    }
+    // GetOrganizationByUserName was removed per multi-tenant refactor — a user may
+    // belong to multiple orgs, so this method no longer has a well-defined return.
+    // Callers must source the active org from IActiveOrganizationContext (Blazor
+    // circuits) or from the request parameter (HTTP) per §5.4.
 
     public int GetOrganizationCount()
     {
@@ -1546,28 +1602,9 @@ public class DataService : IDataService
         return Result.Ok(org.OrganizationName);
     }
 
-    public async Task<Result<string>> GetOrganizationNameByUserName(string userName)
-    {
-        if (string.IsNullOrWhiteSpace(userName))
-        {
-            return Result.Fail<string>("Username cannot be empty.");
-        }
-
-        using var dbContext = _appDbFactory.GetContext();
-
-        var user = await dbContext.Users
-            .AsNoTracking()
-            .Include(x => x.Organization)
-            .FirstOrDefaultAsync(x => x.UserName == userName);
-
-        if (user is null)
-        {
-            return Result.Fail<string>("User not found.");
-        }
-
-        var orgName = $"{user.Organization?.OrganizationName}";
-        return Result.Ok(orgName);
-    }
+    // GetOrganizationNameByUserName was removed for the same reason as
+    // GetOrganizationByUserName above. Use GetOrganizationNameById with the
+    // active org id from the caller's context.
 
     public async Task<IEnumerable<ScriptRun>> GetPendingScriptRuns(string deviceId)
     {
@@ -1643,11 +1680,15 @@ public class DataService : IDataService
     {
         using var dbContext = _appDbFactory.GetContext();
 
+        // SavedScript.OrganizationID is set at creation by the originating org context
+        // (see AddOrUpdateSavedScript). Filter the script row directly rather than via
+        // Creator's org, since under the multi-tenant model the creator may belong to
+        // multiple orgs.
         return await dbContext.SavedScripts
             .AsNoTracking()
             .Include(x => x.Creator)
-            .Where(x => 
-                x.Creator!.OrganizationID == organizationId &&
+            .Where(x =>
+                x.OrganizationID == organizationId &&
                 (x.IsPublic || x.CreatorId == userId))
             .Select(x => new SavedScript()
             {
@@ -1860,7 +1901,7 @@ public class DataService : IDataService
         }
 
         var organization = await dbContext.Organizations
-            .Include(x => x.RemotelyUsers)
+            .Include(x => x.Memberships)
             .FirstOrDefaultAsync(x => x.ID == invite.OrganizationID);
 
         if (organization is null)
@@ -1868,15 +1909,27 @@ public class DataService : IDataService
             return Result.Fail("Organization not found.");
         }
 
-        user.Organization = organization;
-        user.OrganizationID = organization.ID;
-        user.IsAdministrator = invite.IsAdmin;
-        organization.RemotelyUsers.Add(user);
+        // KD-04: invitees always receive base privileges (IsAdministrator=false, CanInvite=false).
+        var membership = new UserOrganizationMembership
+        {
+            User = user,
+            UserId = user.Id,
+            Organization = organization,
+            OrganizationId = organization.ID,
+            IsAdministrator = false,
+            CanInvite = false
+        };
+        dbContext.UserOrganizationMemberships.Add(membership);
+        organization.Memberships.Add(membership);
 
         await dbContext.SaveChangesAsync();
 
         dbContext.InviteLinks.Remove(invite);
-        dbContext.SaveChanges();
+        await dbContext.SaveChangesAsync();
+
+        // FR-14: notify any open circuits for this user of the new membership.
+        await NotifyMembershipChanged(user.Id);
+
         return Result.Ok();
     }
 
@@ -1936,9 +1989,9 @@ public class DataService : IDataService
             return Result.Fail("User not found.");
         }
 
+        // FR-28: tokens belong to users; scope by CreatorId.
         var token = await dbContext.ApiTokens.FirstOrDefaultAsync(x =>
-            x.OrganizationID == user.OrganizationID &&
-            x.ID == tokenId);
+            x.ID == tokenId && x.CreatorId == user.Id);
 
         if (token is null)
         {
@@ -2055,14 +2108,28 @@ public class DataService : IDataService
             return;
         }
 
+        // FR-17: a server admin cannot demote themselves regardless of remaining admin count.
         if (caller.Id == targetUser.Id)
         {
-            // A server admin can't change themselves.
             return;
+        }
+
+        // FR-16: cannot remove the last active server admin.
+        if (!isServerAdmin && targetUser.IsServerAdmin)
+        {
+            var otherActiveAdmins = await dbContext.Users
+                .CountAsync(u => u.IsServerAdmin && u.Id != targetUserId && u.LockoutEnd == null);
+            if (otherActiveAdmins == 0)
+            {
+                return;
+            }
         }
 
         targetUser.IsServerAdmin = isServerAdmin;
         await dbContext.SaveChangesAsync();
+
+        // Server admin status materially changes effective permissions across every org (KD-02).
+        await NotifyMembershipChanged(targetUserId);
     }
 
     public void SetServerVerificationToken(string deviceID, string verificationToken)
@@ -2294,10 +2361,15 @@ public class DataService : IDataService
             return Array.Empty<string>();
         }
 
+        // Org membership via the new join table: a user is "in" the device's org
+        // when they have a UserOrganizationMembership for that org, or are a server admin (FR-18).
         var orgUsers = dbContext.Users
             .Where(user =>
-                user.OrganizationID == device.OrganizationID &&
-                userIDs.Contains(user.Id));
+                userIDs.Contains(user.Id) &&
+                (
+                    user.IsServerAdmin ||
+                    user.Memberships.Any(m => m.OrganizationId == device.OrganizationID)
+                ));
 
         if (string.IsNullOrWhiteSpace(device.DeviceGroupID))
         {
@@ -2307,13 +2379,242 @@ public class DataService : IDataService
         }
 
         var allowedUsers = device?.DeviceGroup?.Users?.Select(x => x.Id) ?? Array.Empty<string>();
+        var deviceOrgId = device!.OrganizationID;
 
         return orgUsers
             .Where(user =>
-                user.IsAdministrator ||
+                user.IsServerAdmin ||
+                user.Memberships.Any(m => m.OrganizationId == deviceOrgId && m.IsAdministrator) ||
                 allowedUsers.Contains(user.Id)
             )
             .Select(x => x.Id)
             .ToArray();
+    }
+
+    // ============================================================
+    // Multi-tenant membership methods (added per §8.1 / FR-08, FR-15, FR-20, FR-21, FR-22, FR-23, FR-24).
+    // ============================================================
+
+    public async Task<Result> AddUserToOrganization(string orgId, string userId)
+    {
+        using var dbContext = _appDbFactory.GetContext();
+
+        var user = await dbContext.Users.FirstOrDefaultAsync(u => u.Id == userId);
+        if (user is null)
+        {
+            return Result.Fail("User not found.");
+        }
+
+        var org = await dbContext.Organizations.FirstOrDefaultAsync(o => o.ID == orgId);
+        if (org is null)
+        {
+            return Result.Fail("Organization not found.");
+        }
+
+        var existing = await dbContext.UserOrganizationMemberships
+            .FirstOrDefaultAsync(m => m.UserId == userId && m.OrganizationId == orgId);
+        if (existing is not null)
+        {
+            return Result.Fail("User is already a member of this organization.");
+        }
+
+        // KD-04: base privileges only.
+        var membership = new UserOrganizationMembership
+        {
+            UserId = userId,
+            OrganizationId = orgId,
+            IsAdministrator = false,
+            CanInvite = false
+        };
+        dbContext.UserOrganizationMemberships.Add(membership);
+        await dbContext.SaveChangesAsync();
+
+        await NotifyMembershipChanged(userId);
+        return Result.Ok();
+    }
+
+    public async Task<Result> RemoveUserFromOrganization(string orgId, string userId)
+    {
+        using var dbContext = _appDbFactory.GetContext();
+        using var tx = await dbContext.Database.BeginTransactionAsync();
+
+        var user = await dbContext.Users
+            .Include(u => u.Memberships)
+            .Include(u => u.DeviceGroups)
+            .FirstOrDefaultAsync(u => u.Id == userId);
+        if (user is null)
+        {
+            return Result.Fail("User not found.");
+        }
+
+        var membership = user.Memberships.FirstOrDefault(m => m.OrganizationId == orgId);
+        if (membership is null)
+        {
+            return Result.Fail("Membership not found.");
+        }
+
+        // FR-24: prevent removing the user's last membership if not a server admin.
+        if (!user.IsServerAdmin && user.Memberships.Count == 1)
+        {
+            return Result.Fail(
+                "Cannot remove the user's only organization membership. " +
+                "Delete the user account instead.");
+        }
+
+        // FR-15: prevent removing the last org admin unless a server admin exists as fallback.
+        if (membership.IsAdministrator)
+        {
+            var otherAdmins = await dbContext.UserOrganizationMemberships
+                .CountAsync(m =>
+                    m.OrganizationId == orgId &&
+                    m.IsAdministrator &&
+                    m.UserId != userId);
+
+            if (otherAdmins == 0)
+            {
+                var hasServerAdmin = await dbContext.Users
+                    .AnyAsync(u => u.IsServerAdmin && u.LockoutEnd == null);
+                if (!hasServerAdmin)
+                {
+                    return Result.Fail(
+                        "Cannot remove the last administrator of this organization " +
+                        "while no server admin exists as a fallback.");
+                }
+            }
+        }
+
+        // FR-26: strip DeviceGroup assignments belonging to this org, in the same transaction.
+        var groupsInOrg = user.DeviceGroups.Where(g => g.OrganizationID == orgId).ToList();
+        foreach (var group in groupsInOrg)
+        {
+            user.DeviceGroups.Remove(group);
+        }
+
+        dbContext.UserOrganizationMemberships.Remove(membership);
+        await dbContext.SaveChangesAsync();
+        await tx.CommitAsync();
+
+        await NotifyMembershipChanged(userId);
+        return Result.Ok();
+    }
+
+    public async Task<Result> SetMemberIsAdmin(string orgId, string userId, bool isAdmin)
+    {
+        using var dbContext = _appDbFactory.GetContext();
+        using var tx = await dbContext.Database.BeginTransactionAsync();
+
+        var membership = await dbContext.UserOrganizationMemberships
+            .FirstOrDefaultAsync(m => m.UserId == userId && m.OrganizationId == orgId);
+        if (membership is null)
+        {
+            return Result.Fail("Membership not found.");
+        }
+
+        if (membership.IsAdministrator == isAdmin)
+        {
+            return Result.Ok();
+        }
+
+        // FR-15: prevent demoting the last org admin unless a server admin exists as fallback.
+        if (!isAdmin && membership.IsAdministrator)
+        {
+            var otherAdmins = await dbContext.UserOrganizationMemberships
+                .CountAsync(m =>
+                    m.OrganizationId == orgId &&
+                    m.IsAdministrator &&
+                    m.UserId != userId);
+
+            if (otherAdmins == 0)
+            {
+                var hasServerAdmin = await dbContext.Users
+                    .AnyAsync(u => u.IsServerAdmin && u.LockoutEnd == null);
+                if (!hasServerAdmin)
+                {
+                    return Result.Fail(
+                        "Cannot demote the last administrator of this organization " +
+                        "while no server admin exists as a fallback.");
+                }
+            }
+        }
+
+        membership.IsAdministrator = isAdmin;
+        await dbContext.SaveChangesAsync();
+        await tx.CommitAsync();
+
+        await NotifyMembershipChanged(userId);
+        return Result.Ok();
+    }
+
+    public async Task<Result> SetMemberCanInvite(string orgId, string userId, bool canInvite)
+    {
+        using var dbContext = _appDbFactory.GetContext();
+
+        var membership = await dbContext.UserOrganizationMemberships
+            .FirstOrDefaultAsync(m => m.UserId == userId && m.OrganizationId == orgId);
+        if (membership is null)
+        {
+            return Result.Fail("Membership not found.");
+        }
+
+        if (membership.CanInvite == canInvite)
+        {
+            return Result.Ok();
+        }
+
+        membership.CanInvite = canInvite;
+        await dbContext.SaveChangesAsync();
+
+        await NotifyMembershipChanged(userId);
+        return Result.Ok();
+    }
+
+    public async Task<UserOrganizationMembership?> GetMembership(string orgId, string userId)
+    {
+        using var dbContext = _appDbFactory.GetContext();
+        return await dbContext.UserOrganizationMemberships
+            .AsNoTracking()
+            .FirstOrDefaultAsync(m => m.UserId == userId && m.OrganizationId == orgId);
+    }
+
+    public async Task<IReadOnlyList<UserOrganizationMembership>> GetMembershipsForUser(string userId)
+    {
+        using var dbContext = _appDbFactory.GetContext();
+        return await dbContext.UserOrganizationMemberships
+            .AsNoTracking()
+            .Include(m => m.Organization)
+            .Where(m => m.UserId == userId)
+            .ToListAsync();
+    }
+
+    public async Task<IReadOnlyList<Organization>> GetAllOrganizations()
+    {
+        using var dbContext = _appDbFactory.GetContext();
+        return await dbContext.Organizations
+            .AsNoTracking()
+            .OrderBy(o => o.OrganizationName)
+            .ToListAsync();
+    }
+
+    public async Task<Result<Organization>> CreateOrganization(string organizationName)
+    {
+        if (string.IsNullOrWhiteSpace(organizationName))
+        {
+            return Result.Fail<Organization>("Organization name is required.");
+        }
+
+        using var dbContext = _appDbFactory.GetContext();
+
+        var trimmed = organizationName.Trim();
+        var existing = await dbContext.Organizations
+            .FirstOrDefaultAsync(o => o.OrganizationName == trimmed);
+        if (existing is not null)
+        {
+            return Result.Fail<Organization>("An organization with that name already exists.");
+        }
+
+        var org = new Organization { OrganizationName = trimmed };
+        dbContext.Organizations.Add(org);
+        await dbContext.SaveChangesAsync();
+        return Result.Ok(org);
     }
 }

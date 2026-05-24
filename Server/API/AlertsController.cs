@@ -31,12 +31,14 @@ public class AlertsController : ControllerBase
     }
 
     [HttpPost("Create")]
-    public async Task<IActionResult> Create(AlertOptions alertOptions)
+    public async Task<IActionResult> Create(AlertOptions alertOptions, [FromQuery] string organizationId)
     {
-        if (!Request.Headers.TryGetOrganizationId(out var orgId))
+        // KD-06: org id is supplied per request as the explicit organizationId query param.
+        if (string.IsNullOrWhiteSpace(organizationId))
         {
             return Unauthorized();
         }
+        var orgId = organizationId;
 
         _logger.LogInformation("Alert created.  Alert Options: {options}", JsonSerializer.Serialize(alertOptions));
 
@@ -125,12 +127,14 @@ public class AlertsController : ControllerBase
     }
 
     [HttpDelete("Delete/{alertID}")]
-    public async Task<IActionResult> Delete(string alertID)
+    public async Task<IActionResult> Delete(string alertID, [FromQuery] string organizationId)
     {
-        if (!Request.Headers.TryGetOrganizationId(out var orgId))
+        // KD-06: org id is supplied per request as the explicit organizationId query param.
+        if (string.IsNullOrWhiteSpace(organizationId))
         {
             return Unauthorized();
         }
+        var orgId = organizationId;
 
         var alertResult = await _dataService.GetAlert(alertID);
         _logger.LogResult(alertResult);
@@ -149,12 +153,14 @@ public class AlertsController : ControllerBase
     }
 
     [HttpDelete("DeleteAll")]
-    public async Task<IActionResult> DeleteAll()
+    public async Task<IActionResult> DeleteAll([FromQuery] string organizationId)
     {
-        if (!Request.Headers.TryGetOrganizationId(out var orgId))
+        // KD-06: org id is supplied per request as the explicit organizationId query param.
+        if (string.IsNullOrWhiteSpace(organizationId))
         {
             return Unauthorized();
         }
+        var orgId = organizationId;
 
         if (User.Identity?.IsAuthenticated == true)
         {

@@ -113,6 +113,7 @@ services.AddIdentityCore<RemotelyUser>(options =>
     .AddSignInManager()
     .AddDefaultTokenProviders();
 
+services.AddHttpContextAccessor();
 services.AddScoped<IAuthorizationHandler, TwoFactorRequiredHandler>();
 services.AddScoped<IAuthorizationHandler, OrganizationAdminRequirementHandler>();
 services.AddScoped<IAuthorizationHandler, ServerAdminRequirementHandler>();
@@ -235,6 +236,7 @@ services.AddScoped<IToastService, ToastService>();
 services.AddScoped<IModalService, ModalService>();
 services.AddScoped<IJsInterop, JsInterop>();
 services.AddScoped<ICircuitConnection, CircuitConnection>();
+services.AddScoped<IActiveOrganizationContext, ActiveOrganizationContext>();
 services.AddScoped<ILoaderService, LoaderService>();
 services.AddScoped(x => (CircuitHandler)x.GetRequiredService<ICircuitConnection>());
 services.AddSingleton<ICircuitManager, CircuitManager>();

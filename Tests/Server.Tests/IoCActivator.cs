@@ -1,4 +1,5 @@
-﻿using Microsoft.AspNetCore.Builder;
+﻿using Bitbound.SimpleMessenger;
+using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -42,6 +43,9 @@ public class IoCActivator
         _builder.Services.AddTransient<IAppDbFactory, AppDbFactory>();
         _builder.Services.AddTransient<IDataService, DataService>();
         _builder.Services.AddTransient<IEmailSenderEx, EmailSenderEx>();
+        // Multi-tenant refactor: DataService now publishes MembershipChangedMessage
+        // via the SimpleMessenger. Register a singleton so tests can resolve it.
+        _builder.Services.AddSingleton(WeakReferenceMessenger.Default);
 
         _webApp = _builder.Build();
     }

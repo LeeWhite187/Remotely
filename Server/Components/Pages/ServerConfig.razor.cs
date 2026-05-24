@@ -72,9 +72,11 @@ public partial class ServerConfig : AuthComponentBase
 
             EnsureUserSet();
 
+            // "My org admins" filter: now means users with org-admin membership in the active org.
             return _userList.Where(x =>
                 (!_showAdminsOnly || x.IsServerAdmin) &&
-                (!_showMyOrgAdminsOnly || x.OrganizationID == User.OrganizationID));
+                (!_showMyOrgAdminsOnly ||
+                    x.Memberships.Any(m => m.OrganizationId == ActiveOrgId && m.IsAdministrator)));
         }
     }
 
@@ -226,7 +228,7 @@ public partial class ServerConfig : AuthComponentBase
             return;
         }
 
-        var success = await EmailSender.SendEmailAsync(User.Email, "Remotely Test Email", "Congratulations! Your SMTP settings are working!", User.OrganizationID);
+        var success = await EmailSender.SendEmailAsync(User.Email, "Remotely Test Email", "Congratulations! Your SMTP settings are working!", null);
         if (success)
         {
             ToastService.ShowToast($"Test email sent to {User.Email}.  Check your inbox (or spam folder).");

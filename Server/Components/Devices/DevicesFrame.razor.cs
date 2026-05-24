@@ -99,7 +99,7 @@ public partial class DevicesFrame : AuthComponentBase
 
         _deviceGroups.Clear();
 
-        _deviceGroups.AddRange(DataService.GetDeviceGroups(UserName));
+        _deviceGroups.AddRange(DataService.GetDeviceGroups(UserName, ActiveOrgId, IsOrgAdmin));
 
         _selectedGroupId = _deviceGroupAll;
 
@@ -303,7 +303,7 @@ public partial class DevicesFrame : AuthComponentBase
         {
             _allDevices.Clear();
 
-            var devices = DataService.GetDevicesForUser(UserName)
+            var devices = DataService.GetDevicesForUser(UserName, ActiveOrgId, IsOrgAdmin)
                 .OrderByDescending(x => x.IsOnline)
                 .ToList();
 
@@ -364,7 +364,7 @@ public partial class DevicesFrame : AuthComponentBase
         EnsureUserSet();
 
         var offlineDevices = DataService
-           .GetDevicesForUser(UserName)
+           .GetDevicesForUser(UserName, ActiveOrgId, IsOrgAdmin)
            .Where(x => !x.IsOnline);
 
         if (_selectedGroupId == _deviceGroupNone)

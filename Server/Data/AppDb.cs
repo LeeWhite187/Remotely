@@ -39,6 +39,7 @@ public class AppDb : IdentityDbContext
     public DbSet<ScriptRun> ScriptRuns { get; set; }
     public DbSet<ScriptSchedule> ScriptSchedules { get; set; }
     public DbSet<SharedFile> SharedFiles { get; set; }
+    public DbSet<UserOrganizationMembership> UserOrganizationMemberships { get; set; }
     public new DbSet<RemotelyUser> Users { get; set; }
 
     protected override void OnConfiguring(DbContextOptionsBuilder options)
@@ -65,8 +66,30 @@ public class AppDb : IdentityDbContext
             .HasMany(x => x.Devices)
             .WithOne(x => x.Organization);
         builder.Entity<Organization>()
-            .HasMany(x => x.RemotelyUsers)
-            .WithOne(x => x.Organization);
+            .HasMany(x => x.Memberships)
+            .WithOne(x => x.Organization!)
+            .HasForeignKey(x => x.OrganizationId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        builder.Entity<UserOrganizationMembership>()
+            .HasOne(x => x.User)
+            .WithMany(x => x.Memberships)
+            .HasForeignKey(x => x.UserId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        builder.Entity<UserOrganizationMembership>()
+            .HasIndex(x => new { x.UserId, x.OrganizationId })
+            .IsUnique();
+
+        // ApiToken.Creator (Phase 3 spec extension): tokens are user-scoped per FR-28.
+        // ClientSetNull on delete so legacy/orphaned tokens don't cascade-delete a user
+        // by accident; OI-08 will drop the column entirely once legacy tokens are cycled out.
+        builder.Entity<ApiToken>()
+            .HasOne(x => x.Creator)
+            .WithMany()
+            .HasForeignKey(x => x.CreatorId)
+            .IsRequired(false)
+            .OnDelete(DeleteBehavior.ClientSetNull);
         builder.Entity<Organization>()
             .HasMany(x => x.DeviceGroups)
             .WithOne(x => x.Organization)

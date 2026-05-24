@@ -27,30 +27,31 @@ public class ScriptResultsController : ControllerBase
         _logger = logger;
     }
 
+    // KD-06: org id is supplied per request as the explicit organizationId query param.
     [HttpGet]
     [ServiceFilter(typeof(ApiAuthorizationFilter))]
-    public ActionResult DownloadAll()
+    public ActionResult DownloadAll([FromQuery] string organizationId)
     {
-        if (!Request.Headers.TryGetOrganizationId(out var orgId))
+        if (string.IsNullOrWhiteSpace(organizationId))
         {
             return Unauthorized();
         }
 
-        var commandResults = _dataService.GetAllCommandResults(orgId);
+        var commandResults = _dataService.GetAllCommandResults(organizationId);
         var content = System.Text.Json.JsonSerializer.Serialize(commandResults);
-        return File(Encoding.UTF8.GetBytes(content), "application/octet-stream", "ScriptHistory.json");       
+        return File(Encoding.UTF8.GetBytes(content), "application/octet-stream", "ScriptHistory.json");
     }
 
     [HttpGet("{scriptId}")]
     [ServiceFilter(typeof(ApiAuthorizationFilter))]
-    public ActionResult<FileResult> DownloadResults(string scriptId)
+    public ActionResult<FileResult> DownloadResults(string scriptId, [FromQuery] string organizationId)
     {
-        if (!Request.Headers.TryGetOrganizationId(out var orgId))
+        if (string.IsNullOrWhiteSpace(organizationId))
         {
             return Unauthorized();
         }
 
-        var commandResult = _dataService.GetScriptResult(scriptId, orgId);
+        var commandResult = _dataService.GetScriptResult(scriptId, organizationId);
         var content = System.Text.Json.JsonSerializer.Serialize(commandResult);
         return File(Encoding.UTF8.GetBytes(content), "application/octet-stream", "ScriptResults.json");
     }

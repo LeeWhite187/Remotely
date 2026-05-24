@@ -189,9 +189,11 @@ public class AgentHub : Hub<IAgentHubClient>
 
             var filteredUserIDs = _dataService.FilterUsersByDevicePermission(userIDs, Device.ID);
 
+            // FilterUsersByDevicePermission already enforces the org-scope check
+            // via the new Memberships join (see DataService); a separate
+            // user.OrganizationID comparison would be redundant and is no longer valid.
             var connections = _circuitManager.Connections
-                .Where(x => x.User.OrganizationID == Device.OrganizationID &&
-                    filteredUserIDs.Contains(x.User.Id));
+                .Where(x => filteredUserIDs.Contains(x.User.Id));
 
             foreach (var connection in connections)
             {
@@ -246,8 +248,7 @@ public class AgentHub : Hub<IAgentHubClient>
         var filteredUserIDs = _dataService.FilterUsersByDevicePermission(userIDs, Device.ID);
 
         var connections = _circuitManager.Connections
-            .Where(x => x.User.OrganizationID == Device.OrganizationID &&
-                filteredUserIDs.Contains(x.User.Id));
+            .Where(x => filteredUserIDs.Contains(x.User.Id));
 
         foreach (var connection in connections)
         {
@@ -303,8 +304,7 @@ public class AgentHub : Hub<IAgentHubClient>
                 var filteredUserIDs = _dataService.FilterUsersByDevicePermission(userIDs, Device.ID);
 
                 var connections = _circuitManager.Connections
-                    .Where(x => x.User.OrganizationID == Device.OrganizationID &&
-                        filteredUserIDs.Contains(x.User.Id));
+                    .Where(x => filteredUserIDs.Contains(x.User.Id));
 
                 foreach (var connection in connections)
                 {

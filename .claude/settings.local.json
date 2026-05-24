@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git checkout *)",
+      "Bash(Get-ChildItem -Recurse -Name \"*.csproj\")",
+      "Bash(Select-String \"Server\")",
+      "Bash(grep \"\\\\.cs$\")",
+      "Bash(git branch *)",
+      "Bash(dotnet build *)",
+      "Bash(mv libman.json libman.json.bak)",
+      "Bash(dotnet ef *)",
+      "Bash(dotnet tool *)",
+      "Bash(rm -f Test_Migration.db)",
+      "Bash(python3 -c ' *)",
+      "Bash(sqlite3 --version)",
+      "Bash(powershell.exe -Command \"Add-Type -AssemblyName 'System.Data.SQLite'; Write-Host 'skip'\")",
+      "Bash(cd \"E:/Projects/Remotely gl/Server\" && find ~/.nuget -name \"Microsoft.Data.Sqlite.dll\" 2>/dev/null | head -3)",
+      "Bash(powershell.exe -Command ' *)",
+      "Bash(mv \"Server/libman.json\" \"Server/libman.json.bak\")",
+      "Bash(dotnet test *)"
+    ]
+  }
+}

@@ -17,8 +17,8 @@ public partial class ManageOrganization : AuthComponentBase
     private readonly List<DeviceGroup> _deviceGroups = new();
     private readonly List<InviteLink> _invites = new();
     private readonly List<RemotelyUser> _orgUsers = new();
-    private bool _inviteAsAdmin;
     private string _inviteEmail = string.Empty;
+    private string _addExistingInput = string.Empty;
     private bool _isLoading = true;
     private string _newDeviceGroupName = string.Empty;
     private Organization? _organization;
@@ -49,6 +49,15 @@ public partial class ManageOrganization : AuthComponentBase
     {
         await base.OnInitializedAsync();
 
+        // FR-30 self-gate (see .razor for rationale). AuthComponentBase has
+        // already populated User and called ActiveOrgContext.RefreshAsync.
+        if (!IsOrgAdmin)
+        {
+            ToastService.ShowToast("Organization admin access required.", classString: "bg-warning");
+            NavManager.NavigateTo("/");
+            return;
+        }
+
         await RefreshData();
 
         _isLoading = false;
@@ -58,7 +67,7 @@ public partial class ManageOrganization : AuthComponentBase
     {
         EnsureUserSet();
 
-        if (!User.IsAdministrator)
+        if (!IsOrgAdmin)
         {
             return;
         }
@@ -73,7 +82,7 @@ public partial class ManageOrganization : AuthComponentBase
             Name = _newDeviceGroupName
         };
 
-        var result = await DataService.AddDeviceGroup(User.OrganizationID, deviceGroup);
+        var result = await DataService.AddDeviceGroup(ActiveOrgId, deviceGroup);
         if (!result.IsSuccess)
         {
             ToastService.ShowToast(result.Reason, classString: "bg-danger");
@@ -112,7 +121,7 @@ public partial class ManageOrganization : AuthComponentBase
     {
         EnsureUserSet();
 
-        if (!User.IsAdministrator)
+        if (!IsOrgAdmin)
         {
             return;
         }
@@ -123,7 +132,7 @@ public partial class ManageOrganization : AuthComponentBase
             return;
         }
 
-        await DataService.DeleteInvite(User.OrganizationID, invite.ID);
+        await DataService.DeleteInvite(ActiveOrgId, invite.ID);
         _invites.RemoveAll(x => x.ID == invite.ID);
         ToastService.ShowToast("Invitation deleted.");
     }
@@ -132,7 +141,7 @@ public partial class ManageOrganization : AuthComponentBase
     {
         EnsureUserSet();
 
-        if (!User.IsAdministrator)
+        if (!IsOrgAdmin)
         {
             return;
         }
@@ -148,7 +157,7 @@ public partial class ManageOrganization : AuthComponentBase
             return;
         }
 
-        await DataService.DeleteDeviceGroup(User.OrganizationID, _selectedDeviceGroupId);
+        await DataService.DeleteDeviceGroup(ActiveOrgId, _selectedDeviceGroupId);
         _deviceGroups.RemoveAll(x => x.ID == _selectedDeviceGroupId);
         _selectedDeviceGroupId = string.Empty;
     }
@@ -157,7 +166,7 @@ public partial class ManageOrganization : AuthComponentBase
     {
         EnsureUserSet();
 
-        if (!User.IsAdministrator)
+        if (!IsOrgAdmin)
         {
             return;
         }
@@ -174,7 +183,7 @@ public partial class ManageOrganization : AuthComponentBase
             return;
         }
 
-        await DataService.DeleteUser(User.OrganizationID, user.Id);
+        await DataService.DeleteUser(ActiveOrgId, user.Id);
         _orgUsers.RemoveAll(x => x.Id == user.Id);
         ToastService.ShowToast("User deleted.");
     }
@@ -183,7 +192,7 @@ public partial class ManageOrganization : AuthComponentBase
     {
         void editDeviceGroupsModal(RenderTreeBuilder builder)
         {
-            var deviceGroups = DataService.GetDeviceGroupsForOrganization(user.OrganizationID);
+            var deviceGroups = DataService.GetDeviceGroupsForOrganization(ActiveOrgId);
 
             builder.OpenComponent<EditDeviceGroup>(0);
             builder.AddAttribute(1, EditDeviceGroup.EditUserPropName, user);
@@ -198,6 +207,14 @@ public partial class ManageOrganization : AuthComponentBase
         if (args.Key.Equals("Enter", StringComparison.OrdinalIgnoreCase))
         {
             await SendInvite();
+        }
+    }
+
+    private async Task EvaluateAddExistingKeypress(KeyboardEventArgs args)
+    {
+        if (args.Key.Equals("Enter", StringComparison.OrdinalIgnoreCase))
+        {
+            await AddExistingUser();
         }
     }
 
@@ -217,7 +234,7 @@ public partial class ManageOrganization : AuthComponentBase
 
         EnsureUserSet();
 
-        if (!User.IsAdministrator)
+        if (!IsOrgAdmin)
         {
             return;
         }
@@ -244,32 +261,51 @@ public partial class ManageOrganization : AuthComponentBase
         ToastService.ShowToast("Organization name changed.");
     }
 
+    /// <summary>
+    /// Per-row admin check used by the Users table. Sourced from the
+    /// UserOrganizationMembership record for the active org rather than the
+    /// removed RemotelyUser.IsAdministrator flag.
+    /// </summary>
+    private bool IsAdminOf(RemotelyUser orgUser)
+    {
+        return orgUser.IsServerAdmin ||
+               orgUser.Memberships.Any(m => m.OrganizationId == ActiveOrgId && m.IsAdministrator);
+    }
+
+    /// <summary>Per-row CanInvite check used by the Users table (FR-21).</summary>
+    private bool CanInviteOf(RemotelyUser orgUser)
+    {
+        return orgUser.IsServerAdmin ||
+               orgUser.Memberships.Any(m => m.OrganizationId == ActiveOrgId && m.CanInvite);
+    }
+
     private async Task RefreshData()
     {
         EnsureUserSet();
 
-        var orgResult = await DataService.GetOrganizationByUserName(UserName);
-        if (!orgResult.IsSuccess)
+        // Multi-tenant refactor: org is identified by the active context, not by user.
+        var orgByIdResult = await DataService.GetOrganizationById(ActiveOrgId);
+        if (!orgByIdResult.IsSuccess)
         {
-            ToastService.ShowToast2(orgResult.Reason, Enums.ToastType.Warning);
+            ToastService.ShowToast2(orgByIdResult.Reason, Enums.ToastType.Warning);
             return;
         }
 
-        _organization = orgResult.Value;
+        _organization = orgByIdResult.Value;
         _orgUsers.Clear();
         _invites.Clear();
         _deviceGroups.Clear();
 
-        _invites.AddRange(DataService.GetAllInviteLinks(User.OrganizationID).OrderBy(x => x.InvitedUser));
-        _deviceGroups.AddRange(DataService.GetDeviceGroups(UserName).OrderBy(x => x.Name));
-        var orgUsers = await DataService.GetAllUsersInOrganization(User.OrganizationID);
+        _invites.AddRange(DataService.GetAllInviteLinks(ActiveOrgId).OrderBy(x => x.InvitedUser));
+        _deviceGroups.AddRange(DataService.GetDeviceGroups(UserName, ActiveOrgId, IsOrgAdmin).OrderBy(x => x.Name));
+        var orgUsers = await DataService.GetAllUsersInOrganization(ActiveOrgId);
         _orgUsers.AddRange(orgUsers.OrderBy(x => x.UserName));
     }
     private async Task ResetPassword(RemotelyUser user)
     {
         EnsureUserSet();
 
-        if (!User.IsAdministrator)
+        if (!IsOrgAdmin)
         {
             return;
         }
@@ -286,90 +322,173 @@ public partial class ManageOrganization : AuthComponentBase
         });
     }
 
+    /// <summary>
+    /// FR-09 / KD-03: email invitation flow for *new* (not-yet-registered) users only.
+    /// Existing users are added via <see cref="AddExistingUser"/>.
+    /// </summary>
     private async Task SendInvite()
     {
         EnsureUserSet();
 
-        if (!User.IsAdministrator)
+        // Server admin OR org admin OR invite-privileged member may send invites (FR-09 / FR-21).
+        if (!CanInvite)
         {
             return;
         }
 
-        if (!DataService.DoesUserExist(_inviteEmail))
+        if (string.IsNullOrWhiteSpace(_inviteEmail))
         {
-            var result = await DataService.CreateUser(_inviteEmail, _inviteAsAdmin, User.OrganizationID);
-            if (result.IsSuccess)
-            {
-                var userResult = await DataService.GetUserByName(_inviteEmail);
-                if (!userResult.IsSuccess)
-                {
-                    ToastService.ShowToast2(userResult.Reason, Enums.ToastType.Warning);
-                    return;
-                }
+            ToastService.ShowToast("Enter an email address.", classString: "bg-warning");
+            return;
+        }
 
-                var user = userResult.Value;
+        // KD-03: invitations are for *new* users only. If an account already exists,
+        // direct the caller to the Add Existing User flow.
+        if (DataService.DoesUserExist(_inviteEmail))
+        {
+            ToastService.ShowToast2(
+                "That user already has a Remotely account. Use 'Add Existing User' instead.",
+                Enums.ToastType.Warning);
+            return;
+        }
 
-                await UserManager.ConfirmEmailAsync(user, await UserManager.GenerateEmailConfirmationTokenAsync(user));
+        var invite = new InviteViewModel { InvitedUser = _inviteEmail };
+        var newInvite = await DataService.AddInvite(ActiveOrgId, invite);
+        if (!newInvite.IsSuccess)
+        {
+            ToastService.ShowToast($"Failed to create invite. {newInvite.Reason}", classString: "bg-danger");
+            return;
+        }
 
-                _orgUsers.Add(user);
+        var inviteURL = $"{NavManager.BaseUri}Invite/{newInvite.Value.ID}";
+        var emailResult = await EmailSender.SendEmailAsync(
+            _inviteEmail,
+            "Invitation to Organization in Remotely",
+            $@"<img src='{NavManager.BaseUri}images/Remotely_Logo.png'/>
+                <br><br>
+                Hello!
+                <br><br>
+                You've been invited to join an organization in Remotely.
+                <br><br>
+                You can join the organization by <a href='{HtmlEncoder.Default.Encode(inviteURL)}'>clicking here</a>.",
+            null);
 
-                _inviteAsAdmin = false;
-                _inviteEmail = string.Empty;
-                ToastService.ShowToast("User account created.");
-                return;
-            }
-            else
-            {
-                ToastService.ShowToast("Create user failed.", classString: "bg-danger");
-                return;
-            }
+        if (emailResult)
+        {
+            ToastService.ShowToast("Invitation sent.");
+            _inviteEmail = string.Empty;
+            _invites.Add(newInvite.Value);
         }
         else
         {
-
-            var invite = new InviteViewModel()
-            {
-                InvitedUser = _inviteEmail,
-                IsAdmin = _inviteAsAdmin
-            };
-            var newInvite = await DataService.AddInvite(User.OrganizationID, invite);
-
-            if (!newInvite.IsSuccess)
-            {
-                ToastService.ShowToast($"Failed to create invite. {newInvite.Reason}", classString: "bg-danger");
-                return;
-            }
-
-            var inviteURL = $"{NavManager.BaseUri}Invite/{newInvite.Value.ID}";
-            var emailResult = await EmailSender.SendEmailAsync(invite.InvitedUser, "Invitation to Organization in Remotely",
-                    $@"<img src='{NavManager.BaseUri}images/Remotely_Logo.png'/>
-                            <br><br>
-                            Hello!
-                            <br><br>
-                            You've been invited to join an organization in Remotely.
-                            <br><br>
-                            You can join the organization by <a href='{HtmlEncoder.Default.Encode(inviteURL)}'>clicking here</a>.",
-                    User.OrganizationID);
-            if (emailResult)
-            {
-                ToastService.ShowToast("Invitation sent.");
-
-                _inviteAsAdmin = false;
-                _inviteEmail = string.Empty;
-                _invites.Add(newInvite.Value);
-            }
-            else
-            {
-                ToastService.ShowToast("Error sending invititation email.", classString: "bg-danger");
-            }
+            ToastService.ShowToast("Error sending invitation email.", classString: "bg-danger");
         }
+    }
+
+    /// <summary>
+    /// FR-08 / KD-03: directly add an existing Remotely user to this organization
+    /// with base privileges. No email is sent.
+    /// </summary>
+    private async Task AddExistingUser()
+    {
+        EnsureUserSet();
+
+        if (!IsOrgAdmin)
+        {
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(_addExistingInput))
+        {
+            ToastService.ShowToast("Enter a username or email.", classString: "bg-warning");
+            return;
+        }
+
+        var userResult = await DataService.GetUserByName(_addExistingInput.Trim());
+        if (!userResult.IsSuccess)
+        {
+            ToastService.ShowToast2(
+                "No Remotely user found with that username/email. Use 'Invite New User' for new accounts.",
+                Enums.ToastType.Warning);
+            return;
+        }
+
+        var result = await DataService.AddUserToOrganization(ActiveOrgId, userResult.Value.Id);
+        if (!result.IsSuccess)
+        {
+            ToastService.ShowToast2(result.Reason, Enums.ToastType.Warning);
+            return;
+        }
+
+        ToastService.ShowToast($"{userResult.Value.UserName} added to the organization.");
+        _addExistingInput = string.Empty;
+        await RefreshData();
+    }
+
+    /// <summary>FR-20: remove a user from the org (separate from full deletion).</summary>
+    private async Task RemoveFromOrg(RemotelyUser orgUser)
+    {
+        EnsureUserSet();
+
+        if (!IsOrgAdmin)
+        {
+            return;
+        }
+
+        if (User.Id == orgUser.Id)
+        {
+            ToastService.ShowToast("You can't remove yourself from this organization.", classString: "bg-warning");
+            return;
+        }
+
+        var confirm = await JsInterop.Confirm(
+            $"Remove {orgUser.UserName} from this organization? Their account will NOT be deleted.");
+        if (!confirm)
+        {
+            return;
+        }
+
+        var result = await DataService.RemoveUserFromOrganization(ActiveOrgId, orgUser.Id);
+        if (!result.IsSuccess)
+        {
+            // FR-15 / FR-24 may have blocked the removal — surface the reason verbatim.
+            ToastService.ShowToast2(result.Reason, Enums.ToastType.Warning);
+            return;
+        }
+
+        _orgUsers.RemoveAll(x => x.Id == orgUser.Id);
+        ToastService.ShowToast($"{orgUser.UserName} removed from the organization.");
+    }
+
+    /// <summary>FR-21: grant or revoke invite privilege on a membership.</summary>
+    private async Task SetUserCanInvite(ChangeEventArgs args, RemotelyUser orgUser)
+    {
+        EnsureUserSet();
+
+        if (!IsOrgAdmin)
+        {
+            return;
+        }
+
+        if (args.Value is not bool canInvite)
+        {
+            return;
+        }
+
+        var result = await DataService.SetMemberCanInvite(ActiveOrgId, orgUser.Id, canInvite);
+        if (!result.IsSuccess)
+        {
+            ToastService.ShowToast2(result.Reason, Enums.ToastType.Warning);
+            return;
+        }
+        ToastService.ShowToast("Invite privilege updated.");
     }
 
     private async Task SetUserIsAdmin(ChangeEventArgs args, RemotelyUser orgUser)
     {
         EnsureUserSet();
 
-        if (!User.IsAdministrator)
+        if (!IsOrgAdmin)
         {
             return;
         }
@@ -379,7 +498,13 @@ public partial class ManageOrganization : AuthComponentBase
             return;
         }
 
-        await DataService.ChangeUserIsAdmin(User.OrganizationID, orgUser.Id, isAdmin);
+        // §8.1 + KD-04: superseded by SetMemberIsAdmin which enforces FR-15 lockout prevention.
+        var result = await DataService.SetMemberIsAdmin(ActiveOrgId, orgUser.Id, isAdmin);
+        if (!result.IsSuccess)
+        {
+            ToastService.ShowToast2(result.Reason, Enums.ToastType.Warning);
+            return;
+        }
         ToastService.ShowToast("Administrator value set.");
     }
 

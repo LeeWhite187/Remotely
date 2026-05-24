@@ -55,7 +55,7 @@ public partial class ScriptSchedules : AuthComponentBase
             EnsureUserSet();
             return 
                 _selectedSchedule.CreatorId == User.Id ||
-                User.IsAdministrator;
+                IsOrgAdmin;
         }
     }
 
@@ -66,7 +66,7 @@ public partial class ScriptSchedules : AuthComponentBase
             EnsureUserSet();
             return 
                 _selectedSchedule.CreatorId == User.Id ||
-                User.IsAdministrator;
+                IsOrgAdmin;
         }
     }
 
@@ -76,9 +76,9 @@ public partial class ScriptSchedules : AuthComponentBase
 
         EnsureUserSet();
 
-        _deviceGroups = DataService.GetDeviceGroups(UserName);
+        _deviceGroups = DataService.GetDeviceGroups(UserName, ActiveOrgId, IsOrgAdmin);
         _devices = DataService
-            .GetDevicesForUser(UserName)
+            .GetDevicesForUser(UserName, ActiveOrgId, IsOrgAdmin)
             .OrderBy(x => x.DeviceName)
             .ToArray();
 
@@ -195,7 +195,7 @@ public partial class ScriptSchedules : AuthComponentBase
             _selectedSchedule.CreatorId = User.Id;
         }
 
-        _selectedSchedule.OrganizationID = User.OrganizationID;
+        _selectedSchedule.OrganizationID = ActiveOrgId;
         _selectedSchedule.NextRun = _selectedSchedule.StartAt;
 
         _selectedSchedule.Devices = _devices.Where(x => _selectedDevices.Contains(x.ID)).ToList();
@@ -213,7 +213,7 @@ public partial class ScriptSchedules : AuthComponentBase
         _schedules.Clear();
         if (User is not null)
         {
-            _schedules.AddRange(await DataService.GetScriptSchedules(User.OrganizationID));
+            _schedules.AddRange(await DataService.GetScriptSchedules(ActiveOrgId));
         }
     }
 

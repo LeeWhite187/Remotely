@@ -1,8 +1,9 @@
 ﻿@implements IDisposable
 @inject NavigationManager NavigationManager
-@inject IAuthService AuthService 
+@inject IAuthService AuthService
 @inject IDataService DataService
-@inject IDataService DataService
+@inject IActiveOrganizationContext ActiveOrgContext
+@inject IToastService ToastService
 
 <div class="ps-4 pb-1 pe-0 pt-0 navbar navbar-dark" style="background-color: rgba(0,0,0,0.3)">
     <a class="navbar-brand text-start" href="">
@@ -25,6 +26,15 @@
 
 <div class="@NavMenuCssClass" @onclick="ToggleNavMenu">
     <ul class="nav flex-column">
+
+        <AuthorizeView>
+            <Authorized>
+                @* Per FR-04 / FR-05 / UR-02: org switcher in the nav bar. *@
+                <li class="nav-item">
+                    <Remotely.Server.Components.Shared.OrgSwitcher />
+                </li>
+            </Authorized>
+        </AuthorizeView>
 
         <li class="nav-item px-3">
             <NavLink class="nav-link" href="" Match="NavLinkMatch.All">
@@ -73,7 +83,7 @@
         </AuthorizeView>
 
 
-        @if (_user?.IsAdministrator == true)
+        @if (ActiveOrgContext.IsOrgAdmin)
         {
             <li class="nav-item px-3 pt-3 small text-muted">
                 Admin
@@ -105,6 +115,12 @@
                 <li class="nav-item px-3">
                     <NavLink class="nav-link" href="server-config">
                         <span class="oi oi-wrench" aria-hidden="true"></span> Server Config
+                    </NavLink>
+                </li>
+                <li class="nav-item px-3">
+                    @* FR-22 / FR-23: server-admin org listing + creation. *@
+                    <NavLink class="nav-link" href="server-config/organizations">
+                        <span class="oi oi-people" aria-hidden="true"></span> Organizations
                     </NavLink>
                 </li>
             }
@@ -156,6 +172,8 @@
     public void Dispose()
     {
         NavigationManager.LocationChanged -= OnLocationChanged;
+        ActiveOrgContext.StateChanged -= HandleActiveOrgStateChanged;
+        ActiveOrgContext.OrganizationRevoked -= HandleOrganizationRevoked;
     }
 
     protected override async Task OnInitializedAsync()
@@ -177,21 +195,52 @@
 
         _user = userResult.Value;
 
-        if (!string.IsNullOrWhiteSpace(_user?.OrganizationID))
+        // Multi-tenant refactor: load the active org from the per-circuit context.
+        await ActiveOrgContext.RefreshAsync();
+        await LoadActiveOrgAsync();
+
+        // Re-render when the user switches orgs or membership changes (FR-14 / FR-29).
+        ActiveOrgContext.StateChanged += HandleActiveOrgStateChanged;
+        ActiveOrgContext.OrganizationRevoked += HandleOrganizationRevoked;
+    }
+
+    private async void HandleActiveOrgStateChanged()
+    {
+        await LoadActiveOrgAsync();
+        await InvokeAsync(StateHasChanged);
+    }
+
+    /// <summary>
+    /// FR-29: a warning toast is shown when the active org is revoked live;
+    /// the user must re-select via the org switcher. If no memberships remain,
+    /// indicate that the server admin must intervene.
+    /// </summary>
+    private async void HandleOrganizationRevoked(string revokedOrgName)
+    {
+        var msg = ActiveOrgContext.AvailableOrganizations.Count == 0
+            ? $"Your access to '{revokedOrgName}' has been revoked. You have no remaining organizations — contact a server administrator."
+            : $"Your access to '{revokedOrgName}' has been revoked. Select another organization from the switcher above.";
+        ToastService.ShowToast(msg, classString: "bg-warning");
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task LoadActiveOrgAsync()
+    {
+        var activeOrgId = ActiveOrgContext.ActiveOrganizationId;
+        if (!string.IsNullOrWhiteSpace(activeOrgId))
         {
-            var orgResult = await DataService.GetOrganizationById(_user.OrganizationID);
+            var orgResult = await DataService.GetOrganizationById(activeOrgId);
             if (orgResult.IsSuccess)
             {
                 _organization = orgResult.Value;
+                return;
             }
         }
-        else
+
+        var defaultResult = await DataService.GetDefaultOrganization();
+        if (defaultResult.IsSuccess)
         {
-            var orgResult = await DataService.GetDefaultOrganization();
-            if (orgResult.IsSuccess)
-            {
-                _organization = orgResult.Value;
-            }
+            _organization = defaultResult.Value;
         }
     }
 

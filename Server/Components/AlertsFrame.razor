@@ -76,7 +76,7 @@
     private async Task ClearAllAlerts()
     {
         EnsureUserSet();
-        await DataService.DeleteAllAlerts(User.OrganizationID, User.UserName);
+        await DataService.DeleteAllAlerts(ActiveOrgId, User.UserName);
         _alerts.Clear();
     }
 

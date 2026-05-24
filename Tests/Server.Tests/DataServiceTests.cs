@@ -1,4 +1,4 @@
-﻿using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Remotely.Server.Services;
 using Remotely.Shared.Dtos;
@@ -76,38 +76,43 @@ public class DataServiceTests
     [TestMethod]
     public void DeviceGroupPermissions()
     {
-        Assert.AreEqual(2, _dataService.GetDevicesForUser(_testData.Org1Admin1.UserName!).Length);
-        Assert.AreEqual(2, _dataService.GetDevicesForUser(_testData.Org1Admin2.UserName!).Length);
-        Assert.AreEqual(0, _dataService.GetDevicesForUser(_testData.Org1User1.UserName!).Length);
-        Assert.AreEqual(0, _dataService.GetDevicesForUser(_testData.Org1User2.UserName!).Length);
-        Assert.AreEqual(0, _dataService.GetDevicesForUser(_testData.Org2User1.UserName!).Length);
-        Assert.AreEqual(0, _dataService.GetDevicesForUser(_testData.Org2User2.UserName!).Length);
+        // Under the multi-tenant model the caller passes explicit org id + isOrgAdmin.
+        // Admins see all devices in the org; non-admins see only devices in their groups.
+        var org1 = _testData.Org1Id;
+        var org2 = _testData.Org2Id;
 
-        Assert.IsTrue(_dataService.DoesUserHaveAccessToDevice(_testData.Org1Device1.ID, _testData.Org1Admin1));
-        Assert.IsTrue(_dataService.DoesUserHaveAccessToDevice(_testData.Org1Device1.ID, _testData.Org1Admin2));
-        Assert.IsFalse(_dataService.DoesUserHaveAccessToDevice(_testData.Org1Device1.ID, _testData.Org1User1));
-        Assert.IsFalse(_dataService.DoesUserHaveAccessToDevice(_testData.Org1Device1.ID, _testData.Org1User2));
-        Assert.IsFalse(_dataService.DoesUserHaveAccessToDevice(_testData.Org1Device1.ID, _testData.Org2User1));
-        Assert.IsFalse(_dataService.DoesUserHaveAccessToDevice(_testData.Org1Device1.ID, _testData.Org2User2));
+        Assert.AreEqual(2, _dataService.GetDevicesForUser(_testData.Org1Admin1.UserName!, org1, isOrgAdmin: true).Length);
+        Assert.AreEqual(2, _dataService.GetDevicesForUser(_testData.Org1Admin2.UserName!, org1, isOrgAdmin: true).Length);
+        Assert.AreEqual(0, _dataService.GetDevicesForUser(_testData.Org1User1.UserName!, org1, isOrgAdmin: false).Length);
+        Assert.AreEqual(0, _dataService.GetDevicesForUser(_testData.Org1User2.UserName!, org1, isOrgAdmin: false).Length);
+        Assert.AreEqual(0, _dataService.GetDevicesForUser(_testData.Org2User1.UserName!, org2, isOrgAdmin: false).Length);
+        Assert.AreEqual(0, _dataService.GetDevicesForUser(_testData.Org2User2.UserName!, org2, isOrgAdmin: false).Length);
+
+        Assert.IsTrue(_dataService.DoesUserHaveAccessToDevice(_testData.Org1Device1.ID, _testData.Org1Admin1, org1, isOrgAdmin: true));
+        Assert.IsTrue(_dataService.DoesUserHaveAccessToDevice(_testData.Org1Device1.ID, _testData.Org1Admin2, org1, isOrgAdmin: true));
+        Assert.IsFalse(_dataService.DoesUserHaveAccessToDevice(_testData.Org1Device1.ID, _testData.Org1User1, org1, isOrgAdmin: false));
+        Assert.IsFalse(_dataService.DoesUserHaveAccessToDevice(_testData.Org1Device1.ID, _testData.Org1User2, org1, isOrgAdmin: false));
+        Assert.IsFalse(_dataService.DoesUserHaveAccessToDevice(_testData.Org1Device1.ID, _testData.Org2User1, org2, isOrgAdmin: false));
+        Assert.IsFalse(_dataService.DoesUserHaveAccessToDevice(_testData.Org1Device1.ID, _testData.Org2User2, org2, isOrgAdmin: false));
 
         var groupID = _testData.Org1Group1.ID;
         _dataService.AddUserToDeviceGroup(_testData.Org1Id, groupID, _testData.Org1User1.UserName!, out _);
         _testData.Org1Device1.DeviceGroupID = groupID;
         _dataService.UpdateDevice(_testData.Org1Device1.ID, "", "", groupID, "");
 
-        Assert.AreEqual(2, _dataService.GetDevicesForUser(_testData.Org1Admin1.UserName!).Length);
-        Assert.AreEqual(2, _dataService.GetDevicesForUser(_testData.Org1Admin2.UserName!).Length);
-        Assert.AreEqual(1, _dataService.GetDevicesForUser(_testData.Org1User1.UserName!).Length);
-        Assert.AreEqual(0, _dataService.GetDevicesForUser(_testData.Org1User2.UserName!).Length);
-        Assert.AreEqual(0, _dataService.GetDevicesForUser(_testData.Org2User1.UserName!).Length);
-        Assert.AreEqual(0, _dataService.GetDevicesForUser(_testData.Org2User2.UserName!).Length);
+        Assert.AreEqual(2, _dataService.GetDevicesForUser(_testData.Org1Admin1.UserName!, org1, isOrgAdmin: true).Length);
+        Assert.AreEqual(2, _dataService.GetDevicesForUser(_testData.Org1Admin2.UserName!, org1, isOrgAdmin: true).Length);
+        Assert.AreEqual(1, _dataService.GetDevicesForUser(_testData.Org1User1.UserName!, org1, isOrgAdmin: false).Length);
+        Assert.AreEqual(0, _dataService.GetDevicesForUser(_testData.Org1User2.UserName!, org1, isOrgAdmin: false).Length);
+        Assert.AreEqual(0, _dataService.GetDevicesForUser(_testData.Org2User1.UserName!, org2, isOrgAdmin: false).Length);
+        Assert.AreEqual(0, _dataService.GetDevicesForUser(_testData.Org2User2.UserName!, org2, isOrgAdmin: false).Length);
 
-        Assert.IsTrue(_dataService.DoesUserHaveAccessToDevice(_testData.Org1Device1.ID, _testData.Org1Admin1));
-        Assert.IsTrue(_dataService.DoesUserHaveAccessToDevice(_testData.Org1Device1.ID, _testData.Org1Admin2));
-        Assert.IsTrue(_dataService.DoesUserHaveAccessToDevice(_testData.Org1Device1.ID, _testData.Org1User1));
-        Assert.IsFalse(_dataService.DoesUserHaveAccessToDevice(_testData.Org1Device1.ID, _testData.Org1User2));
-        Assert.IsFalse(_dataService.DoesUserHaveAccessToDevice(_testData.Org1Device1.ID, _testData.Org2User1));
-        Assert.IsFalse(_dataService.DoesUserHaveAccessToDevice(_testData.Org1Device1.ID, _testData.Org2User2));
+        Assert.IsTrue(_dataService.DoesUserHaveAccessToDevice(_testData.Org1Device1.ID, _testData.Org1Admin1, org1, isOrgAdmin: true));
+        Assert.IsTrue(_dataService.DoesUserHaveAccessToDevice(_testData.Org1Device1.ID, _testData.Org1Admin2, org1, isOrgAdmin: true));
+        Assert.IsTrue(_dataService.DoesUserHaveAccessToDevice(_testData.Org1Device1.ID, _testData.Org1User1, org1, isOrgAdmin: false));
+        Assert.IsFalse(_dataService.DoesUserHaveAccessToDevice(_testData.Org1Device1.ID, _testData.Org1User2, org1, isOrgAdmin: false));
+        Assert.IsFalse(_dataService.DoesUserHaveAccessToDevice(_testData.Org1Device1.ID, _testData.Org2User1, org2, isOrgAdmin: false));
+        Assert.IsFalse(_dataService.DoesUserHaveAccessToDevice(_testData.Org1Device1.ID, _testData.Org2User2, org2, isOrgAdmin: false));
 
         var allDevices = _dataService.GetAllDevices(_testData.Org1Id).Select(x => x.ID).ToArray();
         Assert.AreEqual(2, _dataService.FilterDeviceIdsByUserPermission(allDevices, _testData.Org1Admin1).Length);
@@ -129,12 +134,11 @@ public class DataServiceTests
             Creator = _testData.Org1Admin1,
             CreatorId = _testData.Org1Admin1.Id,
             Name = "GCI",
-            Organization = _testData.Org1Admin1.Organization,
             OrganizationID = _testData.Org1Id,
             Shell = ScriptingShell.PSCore
         };
 
-        await _dataService.AddOrUpdateSavedScript(savedScript, _testData.Org1Admin1.Id);
+        await _dataService.AddOrUpdateSavedScript(savedScript, _testData.Org1Admin1.Id, _testData.Org1Id);
 
         var scriptRun = new ScriptRun()
         {
@@ -144,7 +148,6 @@ public class DataServiceTests
             Initiator = _testData.Org1Admin1.UserName,
             RunAt = now,
             OrganizationID = _testData.Org1Id,
-            Organization = _testData.Org1Admin1.Organization,
             RunOnNextConnect = true
         };
 
@@ -199,7 +202,7 @@ public class DataServiceTests
     [TestMethod]
     public async Task UpdateOrganizationName()
     {
-        Assert.AreEqual("Org1", _testData.Org1Admin1.Organization!.OrganizationName);
+        Assert.AreEqual("Org1", _testData.Org1.OrganizationName);
         await _dataService.UpdateOrganizationName(_testData.Org1Id, "Test Org");
         var updatedOrg = (await _dataService.GetOrganizationById(_testData.Org1Id)).Value;
         Assert.AreEqual("Test Org", updatedOrg!.OrganizationName);
@@ -254,32 +257,39 @@ public class DataServiceTests
         Assert.IsTrue(devices2.Any(x => x.ID == "Org2Device1"));
         Assert.IsTrue(devices2.Any(x => x.ID == "Org2Device2"));
 
-        var org1Ids = new string[]
+        // Org-scoped entities (DeviceGroups, Devices) still expose OrganizationID directly.
+        // User-scoped check shifts to memberships per FR-01 / §6.1.
+        var org1OrgIds = new string[]
         {
             _testData.Org1Group1.OrganizationID,
             _testData.Org1Group2.OrganizationID,
-            _testData.Org1Admin1.OrganizationID,
-            _testData.Org1Admin2.OrganizationID,
-            _testData.Org1User1.OrganizationID,
-            _testData.Org1User2.OrganizationID,
             _testData.Org1Device1.OrganizationID,
             _testData.Org1Device2.OrganizationID
         };
+        Assert.IsTrue(org1OrgIds.All(x => x == _testData.Org1Id));
 
-        Assert.IsTrue(org1Ids.All(x => x == _testData.Org1Id));
-
-        var org2Ids = new string[]
-{
+        var org2OrgIds = new string[]
+        {
             _testData.Org2Group1.OrganizationID,
             _testData.Org2Group2.OrganizationID,
-            _testData.Org2Admin1.OrganizationID,
-            _testData.Org2Admin2.OrganizationID,
-            _testData.Org2User1.OrganizationID,
-            _testData.Org2User2.OrganizationID,
             _testData.Org2Device1.OrganizationID,
             _testData.Org2Device2.OrganizationID
-};
+        };
+        Assert.IsTrue(org2OrgIds.All(x => x == _testData.Org2Id));
 
-        Assert.IsTrue(org2Ids.All(x => x == _testData.Org2Id));
+        // Verify users belong to the right org via Memberships (new model).
+        foreach (var user in new[] { _testData.Org1Admin1, _testData.Org1Admin2, _testData.Org1User1, _testData.Org1User2 })
+        {
+            var memberships = await _dataService.GetMembershipsForUser(user.Id);
+            Assert.IsTrue(memberships.Any(m => m.OrganizationId == _testData.Org1Id),
+                $"{user.UserName} should be a member of Org1");
+        }
+
+        foreach (var user in new[] { _testData.Org2Admin1, _testData.Org2Admin2, _testData.Org2User1, _testData.Org2User2 })
+        {
+            var memberships = await _dataService.GetMembershipsForUser(user.Id);
+            Assert.IsTrue(memberships.Any(m => m.OrganizationId == _testData.Org2Id),
+                $"{user.UserName} should be a member of Org2");
+        }
     }
 }

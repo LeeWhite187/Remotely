@@ -8,6 +8,7 @@
 @inject IJsInterop JsInterop
 @inject IToastService Toasts
 @inject IWebHostEnvironment HostEnv
+@inject IActiveOrganizationContext ActiveOrgContext
 @inject ILogger<Deploy> Logger
 
 @if (_isLoading)
@@ -195,7 +196,9 @@
         }
 
         _isServerAdmin = userResult.Value.IsServerAdmin;
-        _organizationId = userResult.Value.OrganizationID;
+        // Multi-tenant refactor: source the org from the per-circuit context.
+        await ActiveOrgContext.RefreshAsync();
+        _organizationId = ActiveOrgContext.ActiveOrganizationId ?? string.Empty;
         _appDataDir = Path.Combine(HostEnv.ContentRootPath, "AppData");
         _winX64Uri = $"{NavMan.BaseUri}api/custom-binaries/win-x64/desktop/{_organizationId}";
         _winX86Uri = $"{NavMan.BaseUri}api/custom-binaries/win-x86/desktop/{_organizationId}";

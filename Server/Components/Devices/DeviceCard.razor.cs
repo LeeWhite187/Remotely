@@ -79,7 +79,7 @@ public partial class DeviceCard : AuthComponentBase
         EnsureUserSet();
         _theme = await ThemeProvider.GetEffectiveTheme();
         _currentVersion = UpgradeService.GetCurrentVersion();
-        _deviceGroups = DataService.GetDeviceGroups(UserName);
+        _deviceGroups = DataService.GetDeviceGroups(UserName, ActiveOrgId, IsOrgAdmin);
 
         await Register<DeviceCardStateChangedMessage, string>(
             CircuitConnection.ConnectionId,
@@ -201,7 +201,7 @@ public partial class DeviceCard : AuthComponentBase
     private async Task HandleValidSubmit()
     {
         EnsureUserSet();
-        if (!DataService.DoesUserHaveAccessToDevice(Device.ID, User))
+        if (!DataService.DoesUserHaveAccessToDevice(Device.ID, User, ActiveOrgId, IsOrgAdmin))
         {
             ToastService.ShowToast("Unauthorized.", classString: "bg-warning");
             return;
@@ -233,7 +233,7 @@ public partial class DeviceCard : AuthComponentBase
                 return;
             }
             
-            var fileId = await DataService.AddSharedFile(args.File, User.OrganizationID, OnFileInputProgress);
+            var fileId = await DataService.AddSharedFile(args.File, ActiveOrgId, OnFileInputProgress);
             var transferId = Guid.NewGuid().ToString();
             var result = await CircuitConnection.TransferFileFromBrowserToAgent(Device.ID, transferId, [fileId]);
 

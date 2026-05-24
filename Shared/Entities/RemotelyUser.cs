@@ -1,4 +1,4 @@
-﻿using Microsoft.AspNetCore.Identity;
+using Microsoft.AspNetCore.Identity;
 using Remotely.Shared.Models;
 using System.Text.Json.Serialization;
 
@@ -9,13 +9,11 @@ public class RemotelyUser : IdentityUser
     public ICollection<Alert> Alerts { get; set; } = new List<Alert>();
 
     public List<DeviceGroup> DeviceGroups { get; set; } = new();
-    public bool IsAdministrator { get; set; }
+
     public bool IsServerAdmin { get; set; }
 
     [JsonIgnore]
-    public Organization? Organization { get; set; }
-
-    public string OrganizationID { get; set; } = null!;
+    public ICollection<UserOrganizationMembership> Memberships { get; set; } = new List<UserOrganizationMembership>();
 
     public List<SavedScript> SavedScripts { get; set; } = new();
     public List<ScriptSchedule> ScriptSchedules { get; set; } = new();

@@ -39,14 +39,16 @@ public class ScriptingController : ControllerBase
         _agentHubContext = agentHub;
     }
 
+    // KD-06: org id is supplied per request as the explicit organizationId query param.
     [ServiceFilter(typeof(ApiAuthorizationFilter))]
     [HttpPost("[action]/{mode}/{deviceID}")]
-    public async Task<ActionResult<ScriptResult>> ExecuteCommand(string mode, string deviceID)
+    public async Task<ActionResult<ScriptResult>> ExecuteCommand(string mode, string deviceID, [FromQuery] string organizationId)
     {
-        if (!Request.Headers.TryGetOrganizationId(out var orgId))
+        if (string.IsNullOrWhiteSpace(organizationId))
         {
             return Unauthorized();
         }
+        var orgId = organizationId;
 
         if (!Enum.TryParse<ScriptingShell>(mode, true, out var shell))
         {
@@ -69,7 +71,8 @@ public class ScriptingController : ControllerBase
                 return Unauthorized();
             }
 
-            if (!_dataService.DoesUserHaveAccessToDevice(deviceID, userResult.Value))
+            // Use the user-id overload; it derives the org from the device itself.
+            if (!_dataService.DoesUserHaveAccessToDevice(deviceID, userResult.Value.Id))
             {
                 return Unauthorized();
             }

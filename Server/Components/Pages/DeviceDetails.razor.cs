@@ -61,7 +61,7 @@ public partial class DeviceDetails : AuthComponentBase
             if (deviceResult.IsSuccess)
             {
                 _device = deviceResult.Value;
-                _userHasAccess = DataService.DoesUserHaveAccessToDevice(_device.ID, User);
+                _userHasAccess = DataService.DoesUserHaveAccessToDevice(_device.ID, User, ActiveOrgId, IsOrgAdmin);
             }
             else
             {
@@ -69,7 +69,7 @@ public partial class DeviceDetails : AuthComponentBase
             }
         }
 
-        _deviceGroups = DataService.GetDeviceGroups(UserName);
+        _deviceGroups = DataService.GetDeviceGroups(UserName, ActiveOrgId, IsOrgAdmin);
         await Register<ReceiveLogsMessage, string>(
             CircuitConnection.ConnectionId,
             HandleReceiveLogsMessage);
@@ -137,10 +137,10 @@ public partial class DeviceDetails : AuthComponentBase
 
         _scriptResults.Clear();
 
-        if (User.IsAdministrator)
+        if (IsOrgAdmin)
         {
             var results = DataService
-                .GetAllScriptResults(User.OrganizationID, _device.ID)
+                .GetAllScriptResults(ActiveOrgId, _device.ID)
                 .OrderByDescending(x => x.TimeStamp);
 
             foreach (var result in results)
@@ -151,7 +151,7 @@ public partial class DeviceDetails : AuthComponentBase
         else
         {
             var results = DataService
-                .GetAllCommandResultsForUser(User.OrganizationID, UserName, _device.ID)
+                .GetAllCommandResultsForUser(ActiveOrgId, UserName, _device.ID)
                 .OrderByDescending(x => x.TimeStamp);
 
             foreach (var result in results)

@@ -34,7 +34,7 @@ public partial class EditDeviceGroup : AuthComponentBase
             args.Value is bool boolValue &&
             boolValue)
         {
-            if (!DataService.AddUserToDeviceGroup(EditUser.OrganizationID, group.ID, EditUser.UserName, out var result))
+            if (!DataService.AddUserToDeviceGroup(ActiveOrgId, group.ID, EditUser.UserName, out var result))
             {
                 ToastService.ShowToast(result, classString: "bg-warning");
             }
@@ -46,7 +46,7 @@ public partial class EditDeviceGroup : AuthComponentBase
         }
         else
         {
-            var result = await DataService.RemoveUserFromDeviceGroup(EditUser.OrganizationID, group.ID, EditUser.Id);
+            var result = await DataService.RemoveUserFromDeviceGroup(ActiveOrgId, group.ID, EditUser.Id);
             if (!result)
             {
                 ToastService.ShowToast("Failed to remove from group.", classString: "bg-warning");

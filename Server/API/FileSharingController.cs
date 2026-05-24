@@ -33,10 +33,11 @@ public class FileSharingController : ControllerBase
         return File(sharedFile.FileContents, contentType, sharedFile.FileName);
     }
 
+    // KD-06: org id is supplied per request as the explicit organizationId query param.
     [HttpPost]
     [ServiceFilter(typeof(ExpiringTokenFilter))]
     [RequestSizeLimit(AppConstants.MaxUploadFileSize)]
-    public async Task<IEnumerable<string>> Post()
+    public async Task<IEnumerable<string>> Post([FromQuery] string organizationId)
     {
         if (Request.Form.Files.Count !> 0)
         {
@@ -44,11 +45,7 @@ public class FileSharingController : ControllerBase
         }
 
         var fileIds = new List<string>();
-
-        if (!Request.Headers.TryGetOrganizationId(out var orgId))
-        {
-            orgId = string.Empty;
-        }
+        var orgId = organizationId ?? string.Empty;
 
         foreach (var file in Request.Form.Files)
         {

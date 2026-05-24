@@ -44,12 +44,15 @@ public class EmailSenderEx : IEmailSenderEx, IEmailSender<RemotelyUser>
 
     public async Task SendConfirmationLinkAsync(RemotelyUser user, string email, string confirmationLink)
     {
+        // Per multi-tenant refactor: a user can belong to multiple orgs, so the
+        // "user's org" is no longer well-defined. The organizationID parameter on
+        // SendEmailAsync is unused in the current implementation; pass null.
         await SendEmailAsync(
             email,
             "Remotely Account Confirmation",
             "Please confirm your Remotely account by clicking the following link: " +
             $"<a href=\"{confirmationLink}\">{confirmationLink}</a>",
-            user.OrganizationID);
+            null);
     }
 
     public async Task<bool> SendEmailAsync(
@@ -116,7 +119,7 @@ public class EmailSenderEx : IEmailSenderEx, IEmailSender<RemotelyUser>
             email,
             "Remotely Password Reset",
             $"A password reset code has been requested for your account.  Reset Code: {resetCode}",
-            user.OrganizationID);
+            null);
     }
 
     public async Task SendPasswordResetLinkAsync(RemotelyUser user, string email, string resetLink)
@@ -127,7 +130,7 @@ public class EmailSenderEx : IEmailSenderEx, IEmailSender<RemotelyUser>
             "A password reset has been requested for your account.  If this was not requested by you, you can ignore this email.<br/><br/>" +
             "Otherwise, please follow this link to reset your password: " +
             $"<a href=\"{resetLink}\">{resetLink}</a>",
-            user.OrganizationID);
+            null);
     }
 }
 

@@ -55,9 +55,9 @@ public partial class RunScript : AuthComponentBase
     {
         await base.OnInitializedAsync();
         EnsureUserSet();
-        _deviceGroups = DataService.GetDeviceGroups(UserName);
+        _deviceGroups = DataService.GetDeviceGroups(UserName, ActiveOrgId, IsOrgAdmin);
         _devices = DataService
-            .GetDevicesForUser(UserName)
+            .GetDevicesForUser(UserName, ActiveOrgId, IsOrgAdmin)
             .OrderBy(x => x.DeviceName)
             .ToArray();
     }
@@ -128,7 +128,7 @@ public partial class RunScript : AuthComponentBase
 
         var scriptRun = new ScriptRun()
         {
-            OrganizationID = User.OrganizationID,
+            OrganizationID = ActiveOrgId,
             RunAt = Time.Now,
             SavedScriptId = _selectedScript.Id,
             RunOnNextConnect = _runOnNextConnect,

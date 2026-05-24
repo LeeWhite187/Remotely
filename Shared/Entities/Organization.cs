@@ -34,6 +34,6 @@ public class Organization
     [StringLength(25)]
     public required string OrganizationName { get; set; }
 
-    public ICollection<RemotelyUser> RemotelyUsers { get; set; } = [];
+    public ICollection<UserOrganizationMembership> Memberships { get; set; } = [];
     public ICollection<SharedFile> SharedFiles { get; set; } = [];
 }

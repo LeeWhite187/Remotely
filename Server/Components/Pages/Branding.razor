@@ -1,11 +1,17 @@
 ﻿@page "/branding"
 @inherits AuthComponentBase
-@attribute [Authorize(Policy = PolicyNames.OrganizationAdminRequired)]
+@attribute [Authorize]
 @inject IDataService DataService
 @inject IToastService ToastService
 @inject IJsInterop JsInterop
+@inject NavigationManager NavManager
 @using Remotely.Server.Models
 @using System.ComponentModel.DataAnnotations
+
+@*
+    FR-30: Blazor `@page` routes don't carry organizationId, so the policy-based
+    org-admin gate can't run. Self-gate via IsOrgAdmin in OnInitializedAsync.
+*@
 
 <h3 class="mb-3">Branding</h3>
 
@@ -65,6 +71,13 @@
     {
         await base.OnInitializedAsync();
 
+        if (!IsOrgAdmin)
+        {
+            ToastService.ShowToast("Organization admin access required.", classString: "bg-warning");
+            NavManager.NavigateTo("/");
+            return;
+        }
+
         await LoadBrandingInfo();
     }
 
@@ -73,7 +86,7 @@
         EnsureUserSet();
 
         await DataService.UpdateBrandingInfo(
-            User.OrganizationID,
+            ActiveOrgId,
             _inputModel.ProductName,
             _inputModel.IconBytes);
 
@@ -106,15 +119,8 @@
 
     private async Task LoadBrandingInfo()
     {
-        var orgResult = await DataService.GetOrganizationByUserName($"{UserName}");
-
-        if (!orgResult.IsSuccess)
-        {
-            ToastService.ShowToast2(orgResult.Reason, ToastType.Warning);
-            return;
-        }
-
-        var brandingResult = await DataService.GetBrandingInfo(orgResult.Value.ID);
+        // Multi-tenant refactor: branding is keyed by the active org id.
+        var brandingResult = await DataService.GetBrandingInfo(ActiveOrgId);
 
         if (!brandingResult.IsSuccess)
         {
@@ -137,7 +143,7 @@
         var result = await JsInterop.Confirm("Are you sure you want to reset branding to default?");
         if (result)
         {
-            await DataService.ResetBranding(User.OrganizationID);
+            await DataService.ResetBranding(ActiveOrgId);
             _base64Icon = string.Empty;
             await LoadBrandingInfo();
             ToastService.ShowToast("Branding reset.");

@@ -60,7 +60,7 @@ public class ScriptScheduleDispatcherTests
             Name = "_scheduleName",
             Id = 5,
             NextRun = Time.Now.AddMinutes(1),
-            OrganizationID = _testData.Org1User1.OrganizationID,
+            OrganizationID = _testData.Org1Id,
             SavedScriptId = _savedScript.Id
         };
 

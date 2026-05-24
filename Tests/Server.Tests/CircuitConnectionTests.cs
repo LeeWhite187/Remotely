@@ -29,6 +29,7 @@ public class CircuitConnectionTests
     private Mock<IRemoteControlSessionCache> _remoteControlSessionCache;
     private Mock<IMessenger> _messenger;
     private Mock<IAgentHubSessionCache> _agentSessionCache;
+    private Mock<IActiveOrganizationContext> _activeOrgContext;
     private Mock<ILogger<CircuitConnection>> _logger;
     private CircuitConnection _circuitConnection;
 #nullable enable
@@ -49,6 +50,11 @@ public class CircuitConnectionTests
         _remoteControlSessionCache = new Mock<IRemoteControlSessionCache>();
         _messenger = new Mock<IMessenger>();
         _agentSessionCache = new Mock<IAgentHubSessionCache>();
+        _activeOrgContext = new Mock<IActiveOrganizationContext>();
+        // Default test context: act as Org1, org-admin. Individual tests override
+        // by re-setting the mock if they need a different stance.
+        _activeOrgContext.Setup(x => x.ActiveOrganizationId).Returns(_testData.Org1Id);
+        _activeOrgContext.Setup(x => x.IsOrgAdmin).Returns(true);
         _logger = new Mock<ILogger<CircuitConnection>>();
 
         _circuitConnection = new CircuitConnection(
@@ -62,6 +68,7 @@ public class CircuitConnectionTests
             _remoteControlSessionCache.Object,
             _agentSessionCache.Object,
             _messenger.Object,
+            _activeOrgContext.Object,
             _logger.Object);
     }
 

@@ -1,0 +1,144 @@
+@implements IDisposable
+@inject IActiveOrganizationContext ActiveOrgContext
+@inject IJsInterop JsInterop
+@inject IToastService ToastService
+
+@*
+    Per spec FR-04 / FR-05 / UR-02:
+    Drop-down switcher rendered in the nav bar. Regular users see only their
+    explicit memberships (FR-04). Server admins see every org on the server
+    (FR-05). Switching calls IActiveOrganizationContext.SetActiveOrganizationAsync
+    which validates membership server-side (FR-07).
+
+    OI-03: last-active org is persisted in browser localStorage under the key
+    `remotely:activeOrg:{userId}`. The read happens in OnAfterRenderAsync(firstRender)
+    because JS interop is unavailable during prerender and OnInitializedAsync.
+    Known limitation: the device grid may briefly show the fallback default before
+    swapping to the stored preference on the second render pass.
+*@
+
+@if (ActiveOrgContext.AvailableOrganizations.Count == 0)
+{
+    <div class="text-warning small px-3 py-2">
+        No organizations available.
+    </div>
+}
+else
+{
+    <div class="dropdown px-3 py-2">
+        <button class="btn btn-sm btn-outline-light dropdown-toggle w-100 text-start"
+                type="button"
+                data-bs-toggle="dropdown"
+                aria-expanded="false">
+            <span class="oi oi-people me-1" aria-hidden="true"></span>
+            @ActiveOrgName
+        </button>
+        <ul class="dropdown-menu w-100">
+            @foreach (var org in ActiveOrgContext.AvailableOrganizations)
+            {
+                <li @key="org.ID">
+                    <button class="dropdown-item @(org.ID == ActiveOrgContext.ActiveOrganizationId ? "active" : "")"
+                            type="button"
+                            @onclick="() => OnSelect(org.ID)">
+                        @org.OrganizationName
+                    </button>
+                </li>
+            }
+        </ul>
+    </div>
+}
+
+@code {
+    private string ActiveOrgName
+    {
+        get
+        {
+            var active = ActiveOrgContext.AvailableOrganizations
+                .FirstOrDefault(o => o.ID == ActiveOrgContext.ActiveOrganizationId);
+            return active?.OrganizationName ?? "(no org)";
+        }
+    }
+
+    protected override void OnInitialized()
+    {
+        ActiveOrgContext.StateChanged += HandleStateChanged;
+        base.OnInitialized();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender)
+        {
+            return;
+        }
+        await TryAdoptStoredDefaultAsync();
+    }
+
+    private async void HandleStateChanged()
+    {
+        // Marshal back onto the UI thread for the re-render.
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task OnSelect(string orgId)
+    {
+        if (orgId == ActiveOrgContext.ActiveOrganizationId)
+        {
+            return;
+        }
+
+        var ok = await ActiveOrgContext.SetActiveOrganizationAsync(orgId);
+        if (!ok)
+        {
+            ToastService.ShowToast("Could not switch organization.", classString: "bg-warning");
+            return;
+        }
+
+        // OI-03: persist the choice so the next session in this browser/tab restores it.
+        await PersistActiveOrgAsync(orgId);
+    }
+
+    private async Task TryAdoptStoredDefaultAsync()
+    {
+        var userId = ActiveOrgContext.UserId;
+        if (string.IsNullOrWhiteSpace(userId))
+        {
+            return;
+        }
+
+        var key = StorageKey(userId);
+        var stored = await JsInterop.LocalStorageGetItem(key);
+        if (string.IsNullOrWhiteSpace(stored))
+        {
+            return;
+        }
+        if (stored == ActiveOrgContext.ActiveOrganizationId)
+        {
+            return;
+        }
+        // SetActiveOrganizationAsync validates that the user still has access (or is a
+        // server admin). If validation fails, clear the stale stored value.
+        var ok = await ActiveOrgContext.SetActiveOrganizationAsync(stored);
+        if (!ok)
+        {
+            await JsInterop.LocalStorageRemoveItem(key);
+        }
+    }
+
+    private async Task PersistActiveOrgAsync(string orgId)
+    {
+        var userId = ActiveOrgContext.UserId;
+        if (string.IsNullOrWhiteSpace(userId))
+        {
+            return;
+        }
+        await JsInterop.LocalStorageSetItem(StorageKey(userId), orgId);
+    }
+
+    private static string StorageKey(string userId) => $"remotely:activeOrg:{userId}";
+
+    public void Dispose()
+    {
+        ActiveOrgContext.StateChanged -= HandleStateChanged;
+    }
+}

@@ -44,16 +44,17 @@ public class RemoteControlController : ControllerBase
         _logger = logger;
     }
 
+    // KD-06: org id is supplied per request as the explicit organizationId query param.
     [HttpGet("{deviceID}")]
     [ServiceFilter(typeof(ApiAuthorizationFilter))]
-    public async Task<IActionResult> Get(string deviceID)
+    public async Task<IActionResult> Get(string deviceID, [FromQuery] string organizationId)
     {
-        if (!Request.Headers.TryGetOrganizationId(out var orgId))
+        if (string.IsNullOrWhiteSpace(organizationId))
         {
             return Unauthorized();
         }
-        
-        return await InitiateRemoteControl(deviceID, orgId);
+
+        return await InitiateRemoteControl(deviceID, organizationId);
     }
 
     [HttpPost]
@@ -79,11 +80,18 @@ public class RemoteControlController : ControllerBase
             return NotFound();
         }
 
-        var orgId = userResult.Value.OrganizationID;
+        // Multi-tenant refactor: a user may belong to multiple orgs, so the
+        // session's org is derived from the device (which owns its OrganizationID).
+        var deviceResult = await _dataService.GetDevice(rcRequest.DeviceID);
+        if (!deviceResult.IsSuccess || string.IsNullOrWhiteSpace(deviceResult.Value.OrganizationID))
+        {
+            return NotFound();
+        }
+        var orgId = deviceResult.Value.OrganizationID;
 
         var result = await _signInManager.PasswordSignInAsync(rcRequest.Email, rcRequest.Password, false, true);
         if (result.Succeeded &&
-            _dataService.DoesUserHaveAccessToDevice(rcRequest.DeviceID, userResult.Value))
+            _dataService.DoesUserHaveAccessToDevice(rcRequest.DeviceID, userResult.Value.Id))
         {
             _logger.LogInformation("API login successful for {rcRequestEmail}.", rcRequest.Email);
             return await InitiateRemoteControl(rcRequest.DeviceID, orgId);
@@ -124,7 +132,8 @@ public class RemoteControlController : ControllerBase
                 return Unauthorized();
             }
 
-            if (!_dataService.DoesUserHaveAccessToDevice(targetDevice.ID, userResult.Value))
+            // The user-id overload looks up the device's org internally.
+            if (!_dataService.DoesUserHaveAccessToDevice(targetDevice.ID, userResult.Value.Id))
             {
                 return Unauthorized();
             }

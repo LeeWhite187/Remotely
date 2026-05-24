@@ -45,7 +45,7 @@ public partial class SavedScripts : AuthComponentBase
 
             return 
                 _selectedScript.Id == Guid.Empty ||
-                _selectedScript.CreatorId == User.Id || User.IsAdministrator;
+                _selectedScript.CreatorId == User.Id || IsOrgAdmin;
         }
     }
 
@@ -60,7 +60,7 @@ public partial class SavedScripts : AuthComponentBase
 
             return 
                 !string.IsNullOrWhiteSpace(_selectedScript.CreatorId) &&
-                (_selectedScript.CreatorId == User.Id || User.IsAdministrator);
+                (_selectedScript.CreatorId == User.Id || IsOrgAdmin);
         }
     }
 
@@ -88,7 +88,7 @@ public partial class SavedScripts : AuthComponentBase
             return;
         }
         
-        await DataService.AddOrUpdateSavedScript(_selectedScript, User.Id);
+        await DataService.AddOrUpdateSavedScript(_selectedScript, User.Id, ActiveOrgId);
         await ParentPage.RefreshScripts();
         ToastService.ShowToast("Script saved.");
         _alertMessage = "Script saved.";

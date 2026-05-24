@@ -63,7 +63,7 @@ public partial class Terminal : AuthComponentBase, IDisposable
 
             var scriptRun = new ScriptRun
             {
-                OrganizationID = User.OrganizationID,
+                OrganizationID = ActiveOrgId,
                 RunAt = Time.Now,
                 SavedScriptId = script.Id,
                 RunOnNextConnect = false,
