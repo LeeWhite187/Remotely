@@ -5,7 +5,7 @@
 **Author:** Lee
 **Status:** In Design
 **Created:** 2026-05-22T00:00:00Z
-**Last Updated:** 2026-05-24T00:00:00Z
+**Last Updated:** 2026-05-24T01:00:00Z
 **Related Documents:** None.
 
 ---
@@ -575,9 +575,22 @@ namespace Remotely.Server.Models.Messages;
 public record MembershipChangedMessage(string UserId);
 ```
 
-When `DataService` modifies a membership record, it resolves all active `ICircuitConnection` instances for the affected user via `ICircuitManager.Connections`, filtered by `connection.User.Id == userId`. For each matching connection, it sends a `MembershipChangedMessage` via `IMessenger.Send(message, connectionId)`.
+When `DataService` modifies a membership record, it sends a single `MembershipChangedMessage` keyed on the affected user's ID:
 
-`IActiveOrganizationContext` subscribes to `MembershipChangedMessage` on circuit initialization and handles it by calling `RefreshAsync()`. If `RefreshAsync()` returns `true` (state changed), the context raises `StateChanged` and the toast is displayed.
+```csharp
+await _messenger.Send(new MembershipChangedMessage(userId), userId);
+```
+
+Every `IActiveOrganizationContext` instance registers on its own user-ID channel during its first `RefreshAsync` call, once the user ID has been resolved via `AuthenticationStateProvider`:
+
+```csharp
+_messengerRegistration = _messenger.Register<MembershipChangedMessage, string>(
+    this, userId, HandleMembershipChangedMessage);
+```
+
+All connected circuits for the affected user therefore receive the notification regardless of how many circuits the user has open — one send, all circuits notified. This design avoids the constructor-injection cycle that would otherwise exist between `IActiveOrganizationContext` and `ICircuitConnection`. The `DataService` has no dependency on `ICircuitManager`. The late-subscribe window between circuit construction and first `RefreshAsync` has no practical consequence since membership changes cannot be targeted at a not-yet-initialized circuit.
+
+`IActiveOrganizationContext` handles the message by calling `RefreshAsync()`. If `RefreshAsync()` returns `true` (state changed), the context raises `StateChanged` and the toast is displayed.
 
 ---
 
@@ -763,6 +776,10 @@ When an org admin directly adds an existing user to an org, the added user recei
 ---
 
 ## 14. Revision Log
+
+### 2026-05-24T01:00:00Z
+
+§8.3 SimpleMessenger channel updated to match implementation (A-2 resolution, Option 1). The per-connection fanout originally described is replaced with a single userId-keyed broadcast send. DataService sends one MembershipChangedMessage keyed by userId; IActiveOrganizationContext registers on its own userId channel during first RefreshAsync. This design avoids the IActiveOrganizationContext ↔ ICircuitConnection constructor-injection cycle, simplifies the DI graph, and is functionally equivalent — all circuits for the affected user receive the notification. ICircuitManager dependency removed from DataService. Late-subscribe window acknowledged as having no practical consequence.
 
 ### 2026-05-24T00:00:00Z
 
