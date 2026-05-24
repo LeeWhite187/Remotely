@@ -22,10 +22,10 @@ public class ApiToken
     // Dropped in a follow-on migration once all legacy tokens have cycled out (OI-08).
     public string? OrganizationID { get; set; }
 
-    // Added (Phase 3 spec extension): FK to the user who created the token.
-    // Required to support FR-28 "tokens authenticate user identity only" and to
-    // give GetAllApiTokens(userId) sensible per-user scope. Nullable to tolerate
-    // legacy rows pre-migration; new tokens always set this.
+    // Per spec §6.1 / §6.2 (added 2026-05-24): FK to the user who created the token.
+    // Required by FR-28 — "tokens authenticate user identity only" — so that
+    // GetAllApiTokens(userId) can honestly return only that user's tokens.
+    // Nullable to tolerate legacy rows pre-migration; new tokens always set this.
     public string? CreatorId { get; set; }
 
     [JsonIgnore]

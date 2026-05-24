@@ -81,9 +81,11 @@ public class AppDb : IdentityDbContext
             .HasIndex(x => new { x.UserId, x.OrganizationId })
             .IsUnique();
 
-        // ApiToken.Creator (Phase 3 spec extension): tokens are user-scoped per FR-28.
-        // ClientSetNull on delete so legacy/orphaned tokens don't cascade-delete a user
-        // by accident; OI-08 will drop the column entirely once legacy tokens are cycled out.
+        // ApiToken.Creator per spec §6.1 / §6.2 (added 2026-05-24): tokens are
+        // user-scoped per FR-28. ClientSetNull on delete so deleting a user
+        // doesn't cascade through to delete their tokens. The legacy
+        // OrganizationID column is retained for FR-31 legacy-token detection;
+        // OI-08 will drop it in a follow-on migration.
         builder.Entity<ApiToken>()
             .HasOne(x => x.Creator)
             .WithMany()

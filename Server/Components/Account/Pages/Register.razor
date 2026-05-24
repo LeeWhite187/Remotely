@@ -105,11 +105,17 @@ else
 
         Logger.LogInformation("User created a new account with password.");
 
-        // Multi-tenant first-user bootstrap: if this is the very first user on
-        // the server (the only case where Register sets IsServerAdmin=true on
-        // the new user), create the initial Organization and an org-admin
-        // membership. Self-service org creation is otherwise out of scope (§1.7);
-        // this branch exists only to bootstrap the first server admin.
+        // First-user bootstrap per spec §9.3 (added 2026-05-24): on a fresh
+        // install, create the initial "New Organization" and add the registering
+        // user (who is also the first server admin) as a member.
+        //
+        // Per FR-18 (updated 2026-05-24) the user's IsAdministrator flag on the
+        // membership row is irrelevant — FR-18 grants server admins implicit org
+        // admin everywhere. We therefore do NOT call SetMemberIsAdmin here; the
+        // user already has the access they need via IsServerAdmin.
+        //
+        // Self-service org creation is otherwise out of scope (§1.7); this
+        // branch exists only to bootstrap the very first user.
         if (user.IsServerAdmin)
         {
             var newOrgResult = await DataService.CreateOrganization("New Organization");
@@ -130,21 +136,10 @@ else
                         Input.Email,
                         addResult.Reason);
                 }
-                else
-                {
-                    var promoteResult = await DataService.SetMemberIsAdmin(newOrgResult.Value.ID, user.Id, true);
-                    if (!promoteResult.IsSuccess)
-                    {
-                        Logger.LogError(
-                            "First-user bootstrap: SetMemberIsAdmin failed for {UserName}. Reason: {Reason}",
-                            Input.Email,
-                            promoteResult.Reason);
-                    }
-                }
             }
             // Note: any failures above leave the user as a server admin with no
-            // explicit org membership. Per KD-02, the user still has implicit org
-            // admin in any org and can recover via the ServerOrganizations page.
+            // explicit org membership. Per KD-02 / FR-18 the user still has implicit
+            // org admin in any org and can recover via the ServerOrganizations page.
         }
 
         var userId = await UserManager.GetUserIdAsync(user);
