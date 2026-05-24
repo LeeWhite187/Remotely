@@ -5,7 +5,7 @@
 **Author:** Lee
 **Status:** In Design
 **Created:** 2026-05-22T00:00:00Z
-**Last Updated:** 2026-05-23T01:00:00Z
+**Last Updated:** 2026-05-24T00:00:00Z
 **Related Documents:** None.
 
 ---
@@ -154,7 +154,7 @@ Sequence numbers are assigned in the order items are *created*, not the order th
 
 **FR-11 — Preserve IsServerAdmin on user.** The `IsServerAdmin` flag shall remain on `RemotelyUser` unchanged. It is a user-level, not org-scoped, property.
 
-**FR-18 — Server admin implicit org privileges.** A user with `IsServerAdmin = true` shall have full organization administrator privileges in every organization on the server, without requiring an explicit `UserOrganizationMembership` record.
+**FR-18 — Server admin implicit org privileges.** A user with `IsServerAdmin = true` shall have full organization administrator privileges in every organization on the server, without requiring an explicit `UserOrganizationMembership` record. Consequently, the `IsAdministrator` flag on any membership record belonging to a server admin is irrelevant to their actual access level — FR-18 supersedes it. For the first-user bootstrap on a fresh install, the `IsAdministrator` value on the auto-created membership record does not affect the first user's capabilities and need not be set to `true`.
 
 ### 2.2 Active Organization Context
 
@@ -188,7 +188,7 @@ Sequence numbers are assigned in the order items are *created*, not the order th
 
 ### 2.5 API Token Changes
 
-**FR-28 — ApiToken org divorce.** `ApiToken.OrganizationID` shall be made nullable in the schema. New API tokens shall be created with `OrganizationID = null`. API tokens authenticate user identity only; the target org is supplied per-request via an explicit `organizationId` parameter (FR-25).
+**FR-28 — ApiToken org divorce.** `ApiToken.OrganizationID` shall be made nullable in the schema. New API tokens shall be created with `OrganizationID = null`. API tokens authenticate user identity only; the target org is supplied per-request via an explicit `organizationId` parameter (FR-25). Because tokens are now per-user rather than per-org, the API keys management page (`/api-keys`) is accessible to all authenticated users, not only org admins — any user may manage their own tokens.
 
 **FR-31 — Legacy token invalidation.** On receipt of any API token where `OrganizationID` is non-null (a legacy token), the server shall immediately invalidate that token (delete or revoke it), return HTTP 401, and include a response message directing the client to log in again and generate a new token. This applies regardless of whether the legacy token is otherwise valid or expired. Legacy token detection and invalidation shall occur before any other request processing.
 
@@ -400,6 +400,8 @@ The `IActiveOrganizationContext` is a convenience layer for the UI. It is not a 
 
 **ApiToken (modified).** `ApiToken.OrganizationID` is made nullable. New tokens are created with `OrganizationID = null`. Legacy tokens (non-null `OrganizationID`) are detected on first use, immediately invalidated, and the caller is directed to re-authenticate (FR-28, FR-31). The `OrganizationID` column is retained in the schema for legacy detection purposes; it is dropped in a future migration once all legacy tokens have been cycled out (OI-08).
 
+A nullable `CreatorId` FK and `Creator` navigation property (`RemotelyUser?`) are added to `ApiToken`. This addition is required to make `GetAllApiTokens(userId)` return only that user's tokens — without a user FK on the entity, the method has no honest implementation that is both per-user and not a security regression. `CreatorId` is set at token creation time. The FK uses `ClientSetNull` on delete (deleting a user nulls their tokens rather than cascading to token deletion). This schema addition goes beyond what §6.2 originally specified but is a necessary consequence of FR-28's identity-only token model.
+
 **Device (unchanged).** `Device.OrganizationID` and `Device.DeviceGroupID` are unchanged.
 
 ### 6.2 Schema
@@ -428,6 +430,8 @@ Column removed: `IsAdmin`. All existing rows deleted as part of the migration (F
 **ApiTokens — modified**
 
 `OrganizationID` column type changed from `string NOT NULL` to `string NULL`. Existing token rows retain their current `OrganizationID` value; this non-null value is what marks them as legacy tokens subject to FR-31. New tokens are inserted with `OrganizationID = null`.
+
+`CreatorId` column added as `string NULL`, FK → `RemotelyUsers.Id` with `ClientSetNull` on delete. Set at token creation time. Required for per-user token queries (see §6.1 ApiToken note).
 
 ### 6.3 Identifiers
 
@@ -585,6 +589,9 @@ Not applicable: this project uses the existing SignalR infrastructure for member
 
 ### 9.2 Architectural Data Flows
 
+**First-user bootstrap on fresh install.**
+When the first user registers on a server with no existing organizations, the system automatically creates an organization named "New Organization" and makes the registering user both the server admin and the org admin of that organization. The placeholder org name is intentional — the first user is performing server setup, not end-user onboarding, and is expected to rename the org via the Manage Organization page once familiar with the UI. No org name prompt is shown during registration. This is a conscious UX decision: adding an org name field to the registration form would add friction to a one-time setup step.
+
 **New user invitation and registration.**
 An org admin or user with `CanInvite = true` submits an invitation for a new user email address via the Manage Organization page. `DataService.AddInvite` creates an `InviteLink` record associated with the org, with `IsAdmin` removed (since invited users always receive base privileges). The server sends an invitation email containing a registration link that embeds the `InviteLink.ID`. The invitee navigates to the registration page, completes registration, and the registration handler calls `DataService.JoinViaInvitation`. This method creates the user account and a `UserOrganizationMembership` record with base privileges, then deletes the `InviteLink`.
 
@@ -637,6 +644,8 @@ The existing Remotely HTTP API is **materially changed** by this project. The fo
 **Unchanged.** Endpoint paths, HTTP methods, and authentication mechanism (API token header) are otherwise unchanged. The Swagger surface is updated only to add the `organizationId` parameter where it was previously absent.
 
 New org membership management operations (direct add, remove user from org, update role) are performed through the Blazor Server UI and `DataService` only. Exposing these through the API is deferred as OI-04.
+
+**`OrganizationManagementController.SendInvite` — server-admin shortcut (not FR-09 compliant).** The existing `SendInvite` API endpoint's new-user branch directly creates and auto-confirms user accounts without sending an invitation email. This deviates from FR-09's email invitation flow but is intentionally retained as a **server-admin provisioning shortcut** — useful for programmatic account provisioning without requiring email roundtrips. This endpoint is not the standard invite flow; the FR-09-compliant path is through the Blazor UI (`ManageOrganization` page). The existing-user branch of `SendInvite` has been updated to call `AddUserToOrganization` directly per KD-03, consistent with FR-08.
 
 ---
 
@@ -735,6 +744,10 @@ The author currently runs the upstream `immybot/remotely:latest` Docker image. C
 
 The current design stores the last active org in `localStorage`, which is shared across all tabs in the same browser (OI-03). A user who intentionally opens two tabs to manage two different orgs simultaneously will find that switching orgs in one tab updates `localStorage` and affects any subsequently opened tabs. This is accepted as a known limitation of the v1 design. A future refinement could use `sessionStorage` (per-tab, not shared) for the active org, falling back to `localStorage` for the initial default. Deferred; no decision needed before initial implementation.
 
+### OI-09 — Full-page revoked-access notice (FR-29 partial compliance)
+
+FR-29 specifies that if a user's active org is revoked and no memberships remain, the circuit shall display a full-page access-revoked notice directing the user to contact the server admin. The current implementation satisfies the common case (revocation with remaining memberships) via a warning toast and org switcher prompt. The zero-remaining-memberships case shows a toast but leaves the user on their current page with no further guidance. A `RevokedAccessPage` component wired from `MainLayout` or a router guard would close this gap. Deferred; no decision needed before initial deploy.
+
 ### OI-08 — Drop ApiToken.OrganizationID column
 
 Once all legacy API tokens have been invalidated and cycled out (FR-31), the `OrganizationID` column on `ApiTokens` serves no further purpose and should be removed in a follow-on EF Core migration. The column is retained in v1 solely to detect legacy tokens. The implementing agent should note that the column must not be dropped in the v1 migration. A future pass should confirm no legacy tokens remain before dropping.
@@ -750,6 +763,10 @@ When an org admin directly adds an existing user to an org, the added user recei
 ---
 
 ## 14. Revision Log
+
+### 2026-05-24T00:00:00Z
+
+Post-implementation spec update. D-1: ApiToken.CreatorId formally added to §6.1 and §6.2 as a required consequence of FR-28's identity-only token model. D-2: FR-18 updated to clarify that IsAdministrator on a server admin's membership record is irrelevant — FR-18 supersedes it; first-user bootstrap membership flag is therefore immaterial. D-3: OI-09 opened for full-page revoked-access notice (FR-29 partial compliance — toast-only is acceptable for initial deploy). N-1: §10 updated to reclassify OrganizationManagementController.SendInvite new-user branch as a server-admin provisioning shortcut, not the FR-09 invite flow. N-3: FR-28 updated to note ApiKeys page is accessible to all authenticated users under the identity-only token model. A-3: §9.3 updated to document the "New Organization" placeholder name as a conscious UX decision for fresh-install bootstrap.
 
 ### 2026-05-23T01:00:00Z
 
